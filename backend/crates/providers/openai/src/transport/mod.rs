@@ -16,6 +16,7 @@ pub mod request;
 pub mod reset_credits;
 mod response_meta;
 pub(crate) mod session;
+pub mod subscription;
 mod time;
 pub mod tls;
 pub mod usage;

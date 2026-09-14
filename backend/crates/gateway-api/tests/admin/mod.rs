@@ -98,6 +98,7 @@ pub(super) struct AdminTestFixture {
     pub dashboard_summary_range: Arc<Mutex<Option<TimeRange>>>,
     pub provider_error: Arc<Mutex<Option<ProviderAdminError>>>,
     pub account: Arc<Mutex<Option<AccountPageItem>>>,
+    pub provider_quota: Arc<Mutex<Option<ProviderQuota>>>,
 }
 
 impl AdminTestFixture {
@@ -119,6 +120,7 @@ impl AdminTestFixture {
         let dashboard_summary_range = Arc::new(Mutex::new(None));
         let provider_error = Arc::new(Mutex::new(None));
         let account = Arc::new(Mutex::new(None));
+        let provider_quota = Arc::new(Mutex::new(None));
         let unused = Arc::new(UnusedStore {
             usage_records: Arc::clone(&usage_records),
             usage_detail: Arc::clone(&usage_detail),
@@ -142,8 +144,16 @@ impl AdminTestFixture {
             gateway_admin::ports::backup::BackupStorePorts::disabled(),
         );
         let providers: Vec<Arc<dyn ProviderAdmin>> = vec![
-            Arc::new(UnusedProvider::new("openai", Arc::clone(&provider_error))),
-            Arc::new(UnusedProvider::new("xai", Arc::clone(&provider_error))),
+            Arc::new(UnusedProvider::new(
+                "openai",
+                Arc::clone(&provider_error),
+                Arc::clone(&provider_quota),
+            )),
+            Arc::new(UnusedProvider::new(
+                "xai",
+                Arc::clone(&provider_error),
+                Arc::clone(&provider_quota),
+            )),
         ];
         let bundle = gateway_admin::initialize(
             AdminConfig {
@@ -172,6 +182,7 @@ impl AdminTestFixture {
             dashboard_summary_range,
             provider_error,
             account,
+            provider_quota,
         }
     }
 
@@ -719,6 +730,21 @@ impl AccountStore for UnusedStore {
         _: AccountListQuery,
         _: AccountRuntimeSnapshot,
     ) -> AdminStoreResult<AccountPage> {
+        if let Some(account) = self.account.lock().expect("account").clone() {
+            return Ok(AccountPage {
+                config_revision: Revision::new(1).unwrap(),
+                items: vec![account],
+                total: 1,
+                summary: gateway_admin::model::accounts::AccountSummary {
+                    total: 1,
+                    normal: 1,
+                    quota_exhausted: 0,
+                    rate_limited: 0,
+                    disabled: 0,
+                    error: 0,
+                },
+            });
+        }
         Err(unavailable("account list"))
     }
 
@@ -738,6 +764,9 @@ impl AccountStore for UnusedStore {
         _: TimeRange,
         _: &[String],
     ) -> AdminStoreResult<Vec<AccountUsage>> {
+        if self.account.lock().expect("account").is_some() {
+            return Ok(vec![]);
+        }
         Err(unavailable("account usage"))
     }
 
@@ -946,13 +975,19 @@ impl ObservabilityStore for UnusedStore {
 struct UnusedProvider {
     kind: ProviderKind,
     error: Arc<Mutex<Option<ProviderAdminError>>>,
+    quota: Arc<Mutex<Option<ProviderQuota>>>,
 }
 
 impl UnusedProvider {
-    fn new(kind: &str, error: Arc<Mutex<Option<ProviderAdminError>>>) -> Self {
+    fn new(
+        kind: &str,
+        error: Arc<Mutex<Option<ProviderAdminError>>>,
+        quota: Arc<Mutex<Option<ProviderQuota>>>,
+    ) -> Self {
         Self {
             kind: ProviderKind::new(kind).expect("provider kind"),
             error,
+            quota,
         }
     }
 }
@@ -1038,6 +1073,9 @@ impl ProviderAdmin for UnusedProvider {
         &self,
         _: gateway_admin::model::provider_credentials::ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError> {
+        if let Some(quota) = self.quota.lock().expect("quota").clone() {
+            return Ok(quota);
+        }
         Err(unsupported_provider())
     }
 

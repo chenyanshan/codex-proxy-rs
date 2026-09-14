@@ -377,6 +377,12 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
 - xAI 使用 OAuth session；API Key 不是受支持的账号 credential。刷新额度时同步查询官方实时订阅，
   只把套餐事实写入现有 quota JSON。明确无付费订阅的个人账号显示 Free；查询失败、缺失字段或
   团队身份不推断为 Free，订阅查询失败不影响额度观测。
+- OpenAI 主动额度查询成功后，复用当前凭据和账号出口，用已绑定 `upstream_account_id` 单次查询
+  `/backend-api/subscriptions`，最多等待 5 秒并限制响应正文为 64 KiB。只保存本周期结束时间、续费标记、
+  独立观测时间与绑定账号 ID 到现有 Provider quota JSON，经相同 credential revision CAS 提交。
+  不采用其他 workspace、不从该响应改写套餐，失败或缺失日期显示未知；被动额度合并保留订阅原观测时间。
+  列表只读本地安全投影，推理故障恢复不追加订阅网络查询。订阅周期结束与令牌过期相互独立，
+  自动续费或过去的周期结束日期都不构成停用账号、改变额度或刷新凭据的依据。
 - 账号导入和 OAuth complete（包括重新授权）在 credential 提交、Provider 事实失效及快照发布后，
   由 Admin 共用流程后台读取一次额度；不等待观测完成才返回管理请求，失败记录告警但不回滚账号事务。
   手工和后台 credential refresh 仍不隐式刷新 quota。

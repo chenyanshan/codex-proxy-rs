@@ -47,17 +47,14 @@ async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window
         .await
         .expect("seed exhaustion");
     service.synchronize().await.expect("initial periodic check");
-    let requests = server.received_requests().await.expect("requests").len();
+    let requests = usage_request_count(&server).await;
 
     assert!(
         Utc::now().timestamp() < short_reset + 120,
         "fixture must precede grace deadline"
     );
     service.synchronize().await.expect("before grace deadline");
-    assert_eq!(
-        server.received_requests().await.expect("requests").len(),
-        requests
-    );
+    assert_eq!(usage_request_count(&server).await, requests);
 
     mount_usage(&server, usage(0, short_reset + 18_000, 100, week_reset)).await;
     wait_for_reset_grace(short_reset).await;
@@ -75,7 +72,7 @@ async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window
         .synchronize()
         .await
         .expect("next scan before weekly grace deadline");
-    assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+    assert_eq!(usage_request_count(&server).await, 1);
 
     // 周窗口的到期复核仍未恢复时，也不能每轮扫描重复请求。
     wait_for_reset_grace(week_reset).await;
@@ -91,7 +88,7 @@ async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window
         .synchronize()
         .await
         .expect("repeat scan after weekly check");
-    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+    assert_eq!(usage_request_count(&server).await, 2);
 }
 
 #[tokio::test]
@@ -125,6 +122,6 @@ async fn periodic_checks_continue_when_reset_is_unknown_or_far_in_the_future() {
             1
         );
         service.synchronize().await.expect("throttled repeat check");
-        assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+        assert_eq!(usage_request_count(&server).await, 1);
     }
 }

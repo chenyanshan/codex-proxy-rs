@@ -827,6 +827,7 @@ fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> 
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        subscription: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -841,13 +842,16 @@ fn project_quota(
     account: &ProviderAccount,
 ) -> ProviderQuota {
     let mut quota = snapshot
-        .map(project_quota_snapshot)
+        .map(|snapshot| project_quota_snapshot(snapshot, account.upstream_account_id()))
         .unwrap_or_else(empty_quota);
     quota.limit_reached = account.quota().is_exhausted();
     quota
 }
 
-fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota {
+fn project_quota_snapshot(
+    snapshot: CodexAccountQuotaSnapshot,
+    upstream_account_id: Option<&str>,
+) -> ProviderQuota {
     let mut provider_data = Map::new();
     provider_data.insert(
         "remaining_percent".to_owned(),
@@ -888,6 +892,17 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
     // 在窗口全部过期后继续维持限流。
     let limit_reached = quota_windows_limit_reached(&windows);
     ProviderQuota {
+        subscription: snapshot
+            .subscription()
+            .filter(|subscription| Some(subscription.account_id.as_str()) == upstream_account_id)
+            .map(
+                |subscription| gateway_admin::model::provider_credentials::ProviderSubscription {
+                    upstream_account_id: subscription.account_id.clone(),
+                    expires_at: subscription.expires_at,
+                    will_renew: subscription.will_renew,
+                    observed_at: subscription.observed_at,
+                },
+            ),
         plan_type: snapshot.plan_type().map(str::to_owned),
         observed_at: Some(DateTime::<Utc>::from(snapshot.observed_at())),
         refresh_token_expires_at: None,

@@ -5,6 +5,7 @@ mod refresh_timing;
 mod scheduling;
 mod slots;
 mod snapshot;
+mod subscription;
 
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -53,6 +54,16 @@ fn quota_service(store: &Arc<MemoryAccountStore>) -> CodexCredentialQuotaService
             .expect("client"),
         OFFICIAL_CODEX_BASE_URL.to_owned(),
     )
+}
+
+async fn usage_request_count(server: &MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .expect("requests")
+        .iter()
+        .filter(|request| request.url.path() == "/api/codex/usage")
+        .count()
 }
 
 fn quota_service_with_base_url(

@@ -123,6 +123,11 @@ export interface Account {
   label: string | null
   planType: string | null
   planTypeDisplay: string
+  subscription: {
+    expiresAt: string
+    willRenew: boolean | null
+    observedAt: string
+  } | null
   authenticationKind: string
   hasRefreshToken: boolean
   status: AccountStatus

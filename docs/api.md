@@ -451,6 +451,13 @@ OAuth start 使用：
   但上游 authorization code 本身通常只能交换一次；已完成过 token exchange 时应重新创建 OAuth flow。
 - `GET /accounts/quota` 只读取最后一次落库快照；`POST /accounts/quota/refresh` 才访问上游。access token
   已过期时，额度刷新要求先走 credential 刷新或重新授权，不会拿过期 token 探测额度。
+- OpenAI 主动额度刷新成功后，额外查询已绑定账号的订阅周期，列表与 quota 安全视图返回
+  `subscription: { expiresAt, willRenew, observedAt } | null`。时间是 RFC3339 字符串，`willRenew` 可为
+  `true`、`false` 或未知 `null`。`expiresAt` 表示订阅本周期结束，与账号令牌的过期时间独立；自动续费不表示
+  账号将在该时刻不可用。缺失或非法日期、查询失败均返回 `null`，不影响额度刷新、套餐和凭据状态。
+  列表读取不会发订阅请求；订阅时间使用自身的观测时间，普通请求的额度更新不会刷新这个时间。
+  查询期间若已有同凭据修订的更新额度观测，优先返回更新快照，本次订阅补充可能舍弃；订阅为尽力获取，
+  不保证每次刷新都更新，其 `observedAt` 表示实际取得订阅事实的时间。
 - OpenAI 已耗尽账号每 30 分钟主动复核一次，也会在最早未恢复窗口的 `resetAt + 2 分钟` 到期后
   提前复核。后台每 30 秒检查触发条件；同一重置边界复核后仍未恢复时回到 30 分钟重试，
   避免旧 reset 持续触发请求。各窗口独立确认恢复，时间到期本身不会直接解除账号耗尽。

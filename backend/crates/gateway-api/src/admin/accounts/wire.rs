@@ -250,6 +250,7 @@ pub struct AccountView {
     pub plan_type: Option<String>,
     /// 后端生成的套餐展示名称；缺失套餐时为“未知套餐”。
     pub plan_type_display: String,
+    pub subscription: Option<AccountSubscriptionView>,
     pub authentication_kind: String,
     pub has_refresh_token: bool,
     pub status: String,
@@ -328,11 +329,21 @@ pub struct AccountGroupRefView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaView {
+    pub subscription: Option<AccountSubscriptionView>,
     pub refreshed_at_display: String,
     pub limit_reached: bool,
     /// 429 临时限流（Redis 冷却）到期时间展示；非限流中为 `null`。
     pub rate_limited_until: Option<String>,
     pub windows: Vec<AccountQuotaWindowView>,
+}
+
+/// 与令牌有效期区分的订阅本周期结束事实。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSubscriptionView {
+    pub expires_at: String,
+    pub will_renew: Option<bool>,
+    pub observed_at: String,
 }
 
 /// 一个 quota 时间窗口。

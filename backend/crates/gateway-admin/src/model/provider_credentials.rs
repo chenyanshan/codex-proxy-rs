@@ -739,6 +739,7 @@ pub struct ProviderQuotaRequest {
 /// Provider 已解析的 quota 结果及其不透明差异字段。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderQuota {
+    pub subscription: Option<ProviderSubscription>,
     /// 上游额度响应明确提供的套餐，可用于补全账号展示。
     pub plan_type: Option<String>,
     pub observed_at: Option<DateTime<Utc>>,
@@ -747,6 +748,16 @@ pub struct ProviderQuota {
     /// 展示用快照级触顶事实（顶层或任一窗口触顶）；不参与账号五态派生。
     pub limit_reached: bool,
     pub provider_data: Option<ProviderDocument>,
+}
+
+/// 上游订阅本周期结束时间；自动续费不代表账号将在该时刻不可用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSubscription {
+    /// 内部绑定来源，最终组装账号视图时核对，不进入 HTTP DTO。
+    pub upstream_account_id: String,
+    pub expires_at: DateTime<Utc>,
+    pub will_renew: Option<bool>,
+    pub observed_at: DateTime<Utc>,
 }
 
 /// 空值和 `unknown` 代表未提供套餐；新的套餐标识仍按明确值保留。
@@ -871,6 +882,15 @@ pub struct ProviderResetCreditResult {
 }
 
 impl ProviderQuota {
+    /// 账号重授权与读取竞争时，不把旧身份的订阅挂到新的账号资料上。
+    pub fn retain_subscription_for_account(&mut self, upstream_account_id: Option<&str>) {
+        if self.subscription.as_ref().is_some_and(|subscription| {
+            Some(subscription.upstream_account_id.as_str()) != upstream_account_id
+        }) {
+            self.subscription = None;
+        }
+    }
+
     /// 保留账号已有的套餐子类型，仅在缺失时使用上游额度快照补全。
     pub(crate) fn fill_missing_plan_type(&self, account_plan_type: &mut Option<String>) {
         if explicit_plan_type(account_plan_type.as_deref()).is_none() {
