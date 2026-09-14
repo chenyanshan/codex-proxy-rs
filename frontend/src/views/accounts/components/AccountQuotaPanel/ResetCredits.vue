@@ -68,6 +68,10 @@ const creditItems = computed(() => availableCredits.value.map(credit => ({
   title: creditTitle(credit),
   expiry: expiryLabel(credit.expiresAt),
 })))
+const showCountOnlyAction = computed(() => !loadError.value
+  && hasSnapshot.value
+  && availableCount.value > 0
+  && creditItems.value.length === 0)
 const countLabel = computed(() => {
   if (!hasSnapshot.value)
     return loading.value ? '查询中' : '待查询'
@@ -161,7 +165,10 @@ function handleRequestConsume(creditId: string) {
       </section>
 
       <section class="overflow-hidden rounded-cp bg-cp-fill-quaternary" aria-label="使用限额重置">
-        <div class="flex items-center gap-3 pt-4 pr-3 pb-1 pl-4">
+        <div
+          class="flex items-center gap-3 pt-4 pr-3 pl-4"
+          :class="showCountOnlyAction ? 'pb-4' : 'pb-1'"
+        >
           <h3 class="m-0 min-w-0 flex-1 text-cp-sm font-heavy text-cp-text">
             使用限额重置
           </h3>
@@ -228,19 +235,8 @@ function handleRequestConsume(creditId: string) {
             </li>
           </ul>
 
-          <div v-else-if="hasSnapshot && availableCount > 0" class="px-4 pt-2 pb-4">
-            <BaseButton
-              size="sm"
-              variant="primary"
-              :disabled="loading || consuming || ambiguous || !canRequestConsume"
-              @click="requestConsume"
-            >
-              使用一次重置（由上游选择）
-            </BaseButton>
-          </div>
-
           <BaseEmpty
-            v-else
+            v-else-if="!showCountOnlyAction"
             :icon="TicketCheck"
             size="sm"
             surface="none"
@@ -251,12 +247,23 @@ function handleRequestConsume(creditId: string) {
       </section>
     </div>
 
-    <template v-if="showConfirm" #footer>
-      <BaseButton variant="secondary" :disabled="consuming" @click="cancelConsume">
-        返回
-      </BaseButton>
-      <BaseButton variant="primary" :loading="consuming" :disabled="loading || !canRequestConsume" @click="confirmConsume">
-        {{ ambiguous ? '再次确认' : '确认重置' }}
+    <template v-if="showConfirm || showCountOnlyAction" #footer>
+      <template v-if="showConfirm">
+        <BaseButton variant="secondary" :disabled="consuming" @click="cancelConsume">
+          返回
+        </BaseButton>
+        <BaseButton variant="primary" :loading="consuming" :disabled="loading || !canRequestConsume" @click="confirmConsume">
+          {{ ambiguous ? '再次确认' : '确认重置' }}
+        </BaseButton>
+      </template>
+      <BaseButton
+        v-else
+        size="sm"
+        variant="primary"
+        :disabled="loading || consuming || ambiguous || !canRequestConsume"
+        @click="requestConsume"
+      >
+        使用一次重置（由上游选择）
       </BaseButton>
     </template>
   </BaseModal>
