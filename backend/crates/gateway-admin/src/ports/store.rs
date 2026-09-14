@@ -221,6 +221,12 @@ pub trait AuthStore: Send + Sync {
 /// Client API Key 管理写入。
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
+    /// 同一读取时刻的有效预算窗口；不存在或停用的 Key 返回空。
+    async fn client_key_usage(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<crate::model::client_keys::ClientKeyUsage>>;
+
     async fn list_client_keys(&self, query: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage>;
 
     async fn reveal_client_key(

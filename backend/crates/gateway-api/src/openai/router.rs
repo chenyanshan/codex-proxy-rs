@@ -23,6 +23,7 @@ pub(crate) fn router() -> Router<ApiState> {
         .route("/v1/alpha/search", post(standalone_search))
         .route("/v1/responses", get(responses_websocket).post(responses))
         .route("/v1/models", get(models))
+        .route("/v1/usage", get(super::usage::usage))
         // 官方 OpenAI 模型详情合同使用 path ID；它不属于 Admin API 约束。
         .route("/v1/models/{model_id}", get(model_detail))
         // OpenAI 数据面正文属于客户端/上游协议；代理不能用私有大小上限提前拒绝

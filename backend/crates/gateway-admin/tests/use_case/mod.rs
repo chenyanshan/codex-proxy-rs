@@ -480,6 +480,13 @@ impl AccountRuntimeStore for UnavailableStore {
 
 #[async_trait]
 impl ClientKeyStore for UnavailableStore {
+    async fn client_key_usage(
+        &self,
+        _: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_admin::model::client_keys::ClientKeyUsage>> {
+        Err(unavailable("client key usage"))
+    }
+
     async fn list_client_keys(&self, _: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage> {
         Err(unavailable("client key list"))
     }

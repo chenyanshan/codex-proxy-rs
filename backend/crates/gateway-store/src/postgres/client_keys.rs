@@ -679,6 +679,15 @@ impl PgAdminClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for PgAdminClientKeyStore {
+    async fn client_key_usage(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_admin::model::client_keys::ClientKeyUsage>> {
+        super::client_budgets::load_client_key_usage(&self.keys.pool, id)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+    }
+
     async fn list_client_keys(
         &self,
         query: AdminClientKeyListQuery,

@@ -150,6 +150,9 @@ function togglePasswordVisible(): void {
         </BaseButton>
       </div>
     </div>
+    <RouterLink to="/key-usage" class="justify-self-center rounded-cp px-2 py-1 text-sm text-cp-link outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline">
+      查询 Key 用量
+    </RouterLink>
   </BaseCard>
 </template>
 

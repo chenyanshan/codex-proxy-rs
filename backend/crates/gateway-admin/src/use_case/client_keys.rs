@@ -26,6 +26,10 @@ use super::{map_store_error, publish_committed};
 /// API 消费的 Client Key 管理服务。
 #[async_trait]
 pub trait ClientKeyService: Send + Sync {
+    async fn usage(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> Result<Option<crate::model::client_keys::ClientKeyUsage>, AdminError>;
     async fn list(&self, query: ClientKeyListQuery) -> Result<ClientKeyPage, AdminError>;
     async fn reveal(&self, id: &ClientApiKeyId) -> Result<ClientKeySecret, AdminError>;
     async fn create(
@@ -64,6 +68,16 @@ impl DefaultClientKeyService {
 
 #[async_trait]
 impl ClientKeyService for DefaultClientKeyService {
+    async fn usage(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> Result<Option<crate::model::client_keys::ClientKeyUsage>, AdminError> {
+        self.store
+            .client_key_usage(id)
+            .await
+            .map_err(|error| map_store_error(error, "client API key usage"))
+    }
+
     async fn list(&self, query: ClientKeyListQuery) -> Result<ClientKeyPage, AdminError> {
         validate_cursor(&query)?;
         self.store

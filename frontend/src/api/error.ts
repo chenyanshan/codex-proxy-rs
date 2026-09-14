@@ -1,6 +1,7 @@
 import type { AxiosError, AxiosResponse, AxiosResponseHeaders, RawAxiosResponseHeaders } from 'axios'
 
 export type ApiErrorKind = 'api' | 'timeout' | 'network' | 'http' | 'cancelled'
+export type AuthenticationMode = 'admin' | 'client-key'
 
 interface AdminErrorEnvelope {
   code: number
@@ -11,7 +12,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
-    public readonly code?: number,
+    public readonly code?: number | string,
     public readonly requestId?: string,
     public readonly kind: ApiErrorKind = 'api',
   ) {
@@ -20,14 +21,14 @@ export class ApiError extends Error {
   }
 }
 
-export function normalizeApiError(error: AxiosError<unknown>) {
+export function normalizeApiError(error: AxiosError<unknown>, authentication: AuthenticationMode = 'admin') {
   const status = error.response?.status ?? 0
   const requestId = responseHeader(error.response?.headers, 'x-request-id')
 
   if (error.code === 'ERR_CANCELED') {
     return new ApiError('请求已取消', status, undefined, requestId, 'cancelled')
   }
-  const apiError = error.response && normalizeApiResponseError(error.response)
+  const apiError = error.response && normalizeApiResponseError(error.response, authentication)
   if (apiError)
     return apiError
   if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT' || error.code === 'ERR_TIMEOUT') {
@@ -36,10 +37,23 @@ export function normalizeApiError(error: AxiosError<unknown>) {
   if (!error.response) {
     return new ApiError('网络连接失败，请检查网络后重试', 0, undefined, requestId, 'network')
   }
-  return new ApiError(httpFallback(status), status, undefined, requestId, 'http')
+  return new ApiError(authentication === 'client-key' && status === 401 ? 'Key 无效或已停用，请检查后重试' : httpFallback(status), status, undefined, requestId, 'http')
 }
 
-export function normalizeApiResponseError(response: AxiosResponse<unknown>) {
+export function normalizeApiResponseError(response: AxiosResponse<unknown>, authentication: AuthenticationMode = 'admin') {
+  if (authentication === 'client-key') {
+    const data = response.data as { error?: { code?: unknown } } | null
+    if (!data || typeof data !== 'object' || !data.error || typeof data.error !== 'object')
+      return undefined
+    const code = typeof data.error.code === 'string' ? data.error.code : undefined
+    // 不回显服务端任意文本，避免错误内容意外包含用户的 Key。
+    const message = code === 'invalid_api_key' || response.status === 401
+      ? 'Key 无效或已停用，请检查后重试'
+      : code === 'runtime_configuration_unavailable' || code === 'key_usage_unavailable'
+        ? '暂时无法查询用量，请稍后重试'
+        : '查询失败，请稍后重试'
+    return new ApiError(message, response.status, code, responseHeader(response.headers, 'x-request-id'))
+  }
   const envelope = adminErrorEnvelope(response.data)
   if (!envelope || envelope.code === 200)
     return undefined

@@ -12,6 +12,14 @@ use gateway_core::{
 
 use super::{AdminModelError, Revision, account_groups::AccountGroupRef};
 
+/// 仅包含当前 Key 的费用与限额，不携带管理配置或秘密。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientKeyUsage {
+    pub as_of: DateTime<Utc>,
+    pub limits: RateLimits,
+    pub budget: ClientBudgetStatus,
+}
+
 /// Client Key 列表保持旧 HTTP 合同允许的完整非零 `u16` 页大小。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClientKeyPageSize(NonZeroU16);

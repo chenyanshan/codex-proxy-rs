@@ -636,6 +636,32 @@ fn mutation(
 
 #[async_trait]
 impl ClientKeyStore for MemoryClientKeyStore {
+    async fn client_key_usage(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_admin::model::client_keys::ClientKeyUsage>> {
+        if id.as_str() == "unavailable" {
+            return Err(unavailable("client key usage"));
+        }
+        if matches!(id.as_str(), "disabled" | "deleted") {
+            return Ok(None);
+        }
+        Ok(Some(gateway_admin::model::client_keys::ClientKeyUsage {
+            as_of: Utc::now(),
+            limits: RateLimits::unlimited(),
+            budget: gateway_core::engine::budget::ClientBudgetStatus {
+                limits: gateway_core::engine::budget::ClientBudgetLimits {
+                    daily_usd: "1".parse().unwrap(),
+                    weekly_usd: "0".parse().unwrap(),
+                },
+                daily_used_usd: if id.as_str() == "second" { "0.25" } else { "2" }
+                    .parse()
+                    .unwrap(),
+                ..Default::default()
+            },
+        }))
+    }
+
     async fn list_client_keys(&self, _: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage> {
         Ok(ClientKeyPage {
             config_revision: Revision::new(1).expect("revision"),

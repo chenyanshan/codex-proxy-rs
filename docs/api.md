@@ -27,7 +27,7 @@ Client Key 通过账号分组限定路由范围：未绑定分组时可使用全
 
 运行设置可以分别配置 `minCodexDesktopVersion` 与 `minCodexCliVersion`。两者只接受 SemVer，`null`
 表示不限制。API 在 Client Key 鉴权成功后识别官方 Desktop/CLI 请求头；已识别客户端没有合法版本，或版本
-低于对应门槛时，所有 `/v1/*` HTTP 请求和新 WebSocket 握手在访问上游前返回 `426 Upgrade Required`。
+低于对应门槛时，除只读 `/v1/usage` 外的 `/v1/*` HTTP 请求和新 WebSocket 握手在访问上游前返回 `426 Upgrade Required`。
 未知客户端保持兼容，不应用版本门禁。
 
 低版本响应使用 OpenAI 风格错误格式：
@@ -46,6 +46,41 @@ Client Key 通过账号分组限定路由范围：未绑定分组时可使用全
 ```
 
 已识别但缺失或携带非法版本时，`code` 为 `client_version_unavailable`，`current_version` 为 `null`。
+
+### Key 自助用量
+
+`GET /v1/usage` 只接受 `Authorization: Bearer <原始 Key>`，查询该 Key 自身，不接受 Cookie、query 或调用方指定 ID 切换身份。
+无需管理员登录或 Codex 版本头；预算超限不影响查询。所有成功和失败响应均带 `Cache-Control: no-store`。
+
+成功为直接 JSON 对象：
+
+```json
+{
+  "object": "key_usage",
+  "asOf": "2026-09-14T01:00:00Z",
+  "currency": "USD",
+  "timezone": "Asia/Shanghai",
+  "dailyLimitUsd": "10",
+  "dailyUsedUsd": "2.5",
+  "dailyRemainingUsd": "7.5",
+  "dailyResetsAt": "2026-09-14T16:00:00Z",
+  "weeklyLimitUsd": "0",
+  "weeklyUsedUsd": "8.25",
+  "weeklyRemainingUsd": null,
+  "weeklyResetsAt": "2026-09-20T16:00:00Z",
+  "maxConcurrency": 3,
+  "requestsPerMinute": 0
+}
+```
+
+金额为精确十进制字符串；金额、并发和 RPM 限额为零表示不限，不限金额的剩余额为 `null`，有限额剩余额最低为 `"0"`。
+并发/RPM 是配置上限，不是当前占用量。日窗按北京时间零点重置，七天窗从首次准入当日的北京时间零点起算，非自然周。
+未建立或已过期窗口返回用量 `"0"`、重置时间 `null`，待下次使用确定；查询不启动窗口。
+数据来自独立费用账本，不受请求日志清理影响，`asOf` 与窗口判断使用同一数据库时刻。
+
+缺失、错误、停用或删除 Key 统一返回 `401` / `invalid_api_key`；运行配置快照不可用返回 `503` /
+`runtime_configuration_unavailable`；费用存储不可用返回 `503` / `key_usage_unavailable`。错误沿用 OpenAI `error` 对象格式。
+浏览器入口 `/key-usage` 允许免登录粘贴 Key，当前浏览器记住上次查询成功的 Key，默认以密码遮罩显示。再次打开、刷新或返回页面时自动查询最新用量，也支持手动刷新；首次无缓存时等待输入，清空会移除记住的 Key。无效或停用的 Key 显示查询错误，不自动重试。
 
 ### 管理接口
 

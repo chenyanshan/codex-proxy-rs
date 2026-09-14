@@ -4,7 +4,7 @@ import type {
   AxiosRequestConfig,
   AxiosResponse,
 } from 'axios'
-import type { ApiError } from './error'
+import type { ApiError, AuthenticationMode } from './error'
 
 import axios from 'axios'
 import { toast } from '@/components/base/BaseToast'
@@ -14,7 +14,8 @@ import { normalizeApiError, normalizeApiResponseError } from './error'
 export { ApiError } from './error'
 
 export interface RequestOptions {
-  // 静默只关闭全局提示，不吞掉异常，也不跳过会话失效处理。
+  authentication?: AuthenticationMode
+  // 静默只关闭全局提示，不吞掉异常，也不跳过管理员请求的会话失效处理。
   silent?: boolean
   signal?: AbortSignal
   timeout?: number
@@ -54,21 +55,21 @@ function handleUnauthorizedOnce() {
 
 http.interceptors.response.use(
   (response: AxiosResponse<unknown>) => {
-    const error = normalizeApiResponseError(response)
+    const error = normalizeApiResponseError(response, (response.config as RequestConfig).authentication)
     if (error)
       return rejectRequest(error, response.config)
     return response
   },
   (error: AxiosError<unknown>) => {
-    return rejectRequest(normalizeApiError(error), error.config)
+    return rejectRequest(normalizeApiError(error, (error.config as RequestConfig | undefined)?.authentication), error.config)
   },
 )
 
-function rejectRequest(error: ApiError, config?: AxiosRequestConfig & Pick<RequestOptions, 'silent'>) {
+function rejectRequest(error: ApiError, config?: AxiosRequestConfig & Pick<RequestOptions, 'silent' | 'authentication'>) {
   if (error.kind === 'cancelled' || config?.signal?.aborted)
     return Promise.reject(error)
 
-  const sessionExpired = error.status === 401 && !isAuthenticationRequest(config?.url)
+  const sessionExpired = config?.authentication !== 'client-key' && error.status === 401 && !isAuthenticationRequest(config?.url)
   const alreadyHandled = sessionExpired && unauthorizedHandled
   if (sessionExpired)
     handleUnauthorizedOnce()
@@ -96,6 +97,8 @@ function isApiEnvelope(value: unknown): value is ApiEnvelope {
 export default async function request<T = unknown>(config: RequestConfig): Promise<T> {
   const response = await http.request<unknown>({
     ...config,
+    // Fetch 的 false 映射为 credentials: omit，连同源管理员 Cookie 也不发送。
+    ...(config.authentication === 'client-key' ? { adapter: 'fetch', withCredentials: false } : {}),
   })
 
   if (isApiEnvelope(response.data)) {

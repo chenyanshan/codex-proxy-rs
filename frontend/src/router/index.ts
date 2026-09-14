@@ -10,6 +10,9 @@ export const router = createRouter({
 
 // 路由守卫
 router.beforeEach(async (to) => {
+  if (to.path === '/key-usage')
+    return
+
   const authStore = useAuthStore()
 
   // 登录页面不需要认证

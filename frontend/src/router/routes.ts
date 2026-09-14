@@ -2,6 +2,11 @@ import type { RouteRecordRaw } from 'vue-router'
 
 export const routes: RouteRecordRaw[] = [
   {
+    path: '/key-usage',
+    name: 'key-usage',
+    component: () => import('@/views/key-usage/index.vue'),
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('@/views/login/index.vue'),

@@ -63,7 +63,7 @@ flowchart LR
 | `gateway-host` | 配置加载、日志、HTTP 生命周期、Worker 监督和系统更新 |
 | `providers/openai` | OpenAI OAuth、账号选择、目录、额度、Responses/Images/Search transport |
 | `providers/xai` | xAI OAuth session、账号选择、目录、额度和 Grok/Responses 转换 |
-| `frontend` | Vue 管理端，仅通过 Admin API 读写状态 |
+| `frontend` | Vue 管理端通过 Admin API 读写状态；独立 `/key-usage` 页面通过 Bearer Key 调用只读 `/v1/usage` |
 
 依赖方向遵守四条规则：
 
@@ -297,6 +297,11 @@ Continuation 仍受原请求的 Client Key、账号范围、Provider 和发送/�
 会话亲和是优先选择提示，不是硬账号绑定；native continuation 才携带不可跨越的 owner 约束。
 
 ### Client Key 限额与结算
+
+免登录的 `/v1/usage` 由 API 认证 Client Key 后，经 Admin 用例调用 Store 的窄只读查询。
+查询只返回当前 Key 的费用、日/七天限额和并发/RPM 配置，在同一数据库读取时刻复用管理列表的有效窗口投影，
+并重新检查 Key 仍存在且启用。不读取请求观测或分组、账号、密钥明文，不进入准入、结算或窗口推进；
+预算已耗尽的 Key 仍可查询。该入口不执行 Codex 版本门禁，认证成功仍沿用 Key 的最近使用时间记录。
 
 日金额、七天金额、并发和 RPM 按 Client Key 跨账号、跨 Provider 合计，零表示不限；修改限额不重置已用金额。
 Core 负责准入与结算时序，Store 持久化费用账本，Admin 负责限额配置。

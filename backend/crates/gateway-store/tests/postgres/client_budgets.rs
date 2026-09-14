@@ -64,6 +64,161 @@ fn context() -> MutationContext {
 }
 
 #[tokio::test]
+async fn self_usage_reads_authoritative_windows_without_mutating_them() {
+    let Some(database) = TestDatabase::create("budget_self_usage").await else {
+        return;
+    };
+    seed(&database, "first", "1", "5").await;
+    seed(&database, "second", "0", "0").await;
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    let first = admin
+        .client_key_usage(&key_id("first"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.budget.daily_used_usd.canonical(), "0");
+    assert!(first.budget.daily_resets_at.is_none());
+    assert!(first.budget.weekly_resets_at.is_none());
+    let count: i64 = sqlx::query_scalar("select count(*) from client_key_budget_windows")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+
+    let budgets = PgClientBudgetStore::new(database.pool.clone());
+    budgets.admit(key_id("first")).await.unwrap();
+    budgets
+        .settle(charge("first", "self-usage", "1.25"))
+        .await
+        .unwrap();
+    let before: serde_json::Value = sqlx::query_scalar(
+        "select to_jsonb(w) from client_key_budget_windows w where client_api_key_id='first'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    let first = admin
+        .client_key_usage(&key_id("first"))
+        .await
+        .unwrap()
+        .unwrap();
+    let second = admin
+        .client_key_usage(&key_id("second"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.budget.daily_used_usd.canonical(), "1.25");
+    assert_eq!(second.budget.daily_used_usd.canonical(), "0");
+    assert!(!second.budget.limits.is_limited());
+    let after: serde_json::Value = sqlx::query_scalar(
+        "select to_jsonb(w) from client_key_budget_windows w where client_api_key_id='first'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(before, after);
+    sqlx::query("delete from model_requests")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        admin
+            .client_key_usage(&key_id("first"))
+            .await
+            .unwrap()
+            .unwrap()
+            .budget,
+        first.budget
+    );
+    sqlx::query(
+        "update client_api_keys set daily_limit_usd=3, weekly_limit_usd=9 where id='first'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let updated = admin
+        .client_key_usage(&key_id("first"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.budget.daily_used_usd, first.budget.daily_used_usd);
+    assert_eq!(updated.budget.limits.daily_usd.canonical(), "3");
+    sqlx::query("update client_key_budget_windows set daily_end=now()-interval '1 second' where client_api_key_id='first'").execute(&database.pool).await.unwrap();
+    let daily_expired = admin
+        .client_key_usage(&key_id("first"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(daily_expired.budget.daily_used_usd.canonical(), "0");
+    assert!(daily_expired.budget.daily_resets_at.is_none());
+    assert_eq!(daily_expired.budget.weekly_used_usd.canonical(), "1.25");
+    sqlx::query("update client_key_budget_windows set weekly_end=now()-interval '1 second' where client_api_key_id='first'").execute(&database.pool).await.unwrap();
+    let expired = admin
+        .client_key_usage(&key_id("first"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(expired.budget.weekly_used_usd.canonical(), "0");
+    assert!(expired.budget.weekly_resets_at.is_none());
+    let stored: String = sqlx::query_scalar("select weekly_used_usd::text from client_key_budget_windows where client_api_key_id='first'").fetch_one(&database.pool).await.unwrap();
+    assert_eq!(
+        stored
+            .parse::<gateway_core::metering::Decimal>()
+            .unwrap()
+            .canonical(),
+        "1.25"
+    );
+    let events: i64 = sqlx::query_scalar("select count(*) from client_key_charge_events")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(events, 1);
+    let requests: i64 = sqlx::query_scalar("select count(*) from model_requests")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(requests, 0);
+    sqlx::query("update client_api_keys set enabled=false where id='first'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(
+        admin
+            .client_key_usage(&key_id("first"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    sqlx::query("delete from client_api_keys where id='first'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(
+        admin
+            .client_key_usage(&key_id("first"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn self_usage_storage_outage_is_not_reported_as_missing_key() {
+    let Some(database) = TestDatabase::create("budget_self_outage").await else {
+        return;
+    };
+    seed(&database, "key", "1", "5").await;
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    sqlx::query("alter table client_key_budget_windows rename to unavailable_windows")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(admin.client_key_usage(&key_id("key")).await.is_err());
+    database.close().await;
+}
+
+#[tokio::test]
 async fn budgets_settle_exactly_once_and_enforce_each_threshold_across_store_instances() {
     let Some(database) = TestDatabase::create("budgets_exact").await else {
         return;

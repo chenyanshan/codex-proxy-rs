@@ -26,6 +26,13 @@ struct TestClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for TestClientKeyStore {
+    async fn client_key_usage(
+        &self,
+        _: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_admin::model::client_keys::ClientKeyUsage>> {
+        Err(unused())
+    }
+
     async fn list_client_keys(&self, query: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage> {
         assert_eq!(query.page_size.get(), u16::MAX);
         Ok(ClientKeyPage {
