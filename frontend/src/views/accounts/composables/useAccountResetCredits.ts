@@ -12,8 +12,8 @@ import { errorMessage } from '@/utils/async'
 
 interface PendingResetCreditOperation {
   accountId: string
-  creditId: string
-  credit: AccountResetCredit
+  creditId?: string
+  credit?: AccountResetCredit
   redeemRequestId: string
   hasTransportFailure: boolean
 }
@@ -104,17 +104,21 @@ export function useAccountResetCredits(options: {
     availableCredits.value.find(credit => credit.id === selectedCreditId.value),
   )
   const consumptionCredit = computed(() =>
-    pendingOperation.value?.credit ?? selectedCredit.value,
+    pendingOperation.value ? pendingOperation.value.credit : selectedCredit.value,
   )
   const ambiguous = computed(() => pendingOperation.value?.hasTransportFailure === true)
+  const canStartConsume = computed(() =>
+    hasSnapshot.value && !loadError.value && availableCount.value > 0
+    && (selectedCredit.value !== undefined || availableCredits.value.length === 0),
+  )
   const canRequestConsume = computed(() =>
-    ambiguous.value || (availableCount.value > 0 && selectedCredit.value !== undefined),
+    ambiguous.value || canStartConsume.value,
   )
 
   function reconcileSelectedCredit() {
     const operation = pendingOperation.value
     if (operation) {
-      selectedCreditId.value = operation.creditId
+      selectedCreditId.value = operation.creditId ?? ''
       return
     }
 
@@ -163,10 +167,10 @@ export function useAccountResetCredits(options: {
 
     const credit = selectedCredit.value
     // 确认发送时才建立操作；仅打开或取消确认弹窗不占用账号的消费状态。
-    const operation = target.pendingOperation ?? (credit && availableCount.value > 0
+    const operation = target.pendingOperation ?? (canStartConsume.value
       ? {
           accountId: target.accountId,
-          creditId: credit.id,
+          creditId: credit?.id,
           credit,
           redeemRequestId: generateRedeemRequestId(),
           hasTransportFailure: false,

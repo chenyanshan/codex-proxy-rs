@@ -60,7 +60,9 @@ const triggerLabel = computed(() => {
   return hasSnapshot.value ? `查看主动重置卡，最近查询 ${availableCount.value} 张可用` : '查看主动重置卡'
 })
 const showTriggerCount = computed(() => hasSnapshot.value && availableCount.value > 0)
-const confirmCreditTitle = computed(() => creditTitle(consumptionCredit.value))
+const confirmCreditTitle = computed(() => consumptionCredit.value
+  ? creditTitle(consumptionCredit.value)
+  : '使用一次重置（由上游选择）')
 const creditItems = computed(() => availableCredits.value.map(credit => ({
   id: credit.id,
   title: creditTitle(credit),
@@ -226,6 +228,17 @@ function handleRequestConsume(creditId: string) {
             </li>
           </ul>
 
+          <div v-else-if="hasSnapshot && availableCount > 0" class="px-4 pt-2 pb-4">
+            <BaseButton
+              size="sm"
+              variant="primary"
+              :disabled="loading || consuming || ambiguous || !canRequestConsume"
+              @click="requestConsume"
+            >
+              使用一次重置（由上游选择）
+            </BaseButton>
+          </div>
+
           <BaseEmpty
             v-else
             :icon="TicketCheck"
@@ -242,7 +255,7 @@ function handleRequestConsume(creditId: string) {
       <BaseButton variant="secondary" :disabled="consuming" @click="cancelConsume">
         返回
       </BaseButton>
-      <BaseButton variant="primary" :loading="consuming" @click="confirmConsume">
+      <BaseButton variant="primary" :loading="consuming" :disabled="loading || !canRequestConsume" @click="confirmConsume">
         {{ ambiguous ? '再次确认' : '确认重置' }}
       </BaseButton>
     </template>
