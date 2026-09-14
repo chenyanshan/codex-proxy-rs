@@ -56,16 +56,6 @@ fn quota_service(store: &Arc<MemoryAccountStore>) -> CodexCredentialQuotaService
     )
 }
 
-async fn usage_request_count(server: &MockServer) -> usize {
-    server
-        .received_requests()
-        .await
-        .expect("requests")
-        .iter()
-        .filter(|request| request.url.path() == "/api/codex/usage")
-        .count()
-}
-
 fn quota_service_with_base_url(
     store: &Arc<MemoryAccountStore>,
     http: reqwest::Client,

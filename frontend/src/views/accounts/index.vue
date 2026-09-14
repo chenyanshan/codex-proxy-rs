@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ChevronDown } from '@lucide/vue'
-import { useMediaQuery } from '@vueuse/core'
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -9,7 +8,6 @@ import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
-import { resolveColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
@@ -25,7 +23,6 @@ import AccountPlanBadge from './components/AccountPlanBadge.vue'
 import AccountQuotaPanel from './components/AccountQuotaPanel/index.vue'
 import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell/index.vue'
 import AccountStatusBadge from './components/AccountStatusBadge/index.vue'
-import AccountSubscriptionCell from './components/AccountSubscriptionCell.vue'
 import AccountTableActions from './components/AccountTableActions.vue'
 import AccountUsagePanel from './components/AccountUsagePanel.vue'
 import { useAccountBatchEditor } from './composables/useAccountBatchEditor'
@@ -37,17 +34,6 @@ import { useAccountsTable } from './composables/useAccountsTable'
 import { accountColumns, derivedAccountStatus } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
-const narrowTable = useMediaQuery('(max-width: 639px)')
-// 窄屏保留左侧选择与展开，操作列随表格横滚，给日期和续费文案留出完整可读区域。
-const visibleAccountColumns = computed(() => narrowTable.value
-  ? accountColumns.map(column => column.key === 'actions' ? { ...column, kind: 'custom' as const } : column)
-  : accountColumns)
-const tableScrollStyle = computed(() => ({
-  // 复用表格列宽合同，滚动定位时避开左侧固定列，不另设固定像素值。
-  '--account-table-sticky-width': `${resolveColumns(visibleAccountColumns.value)
-    .filter(column => column.sticky === 'left')
-    .reduce((width, column) => width + column.basisWidth, 0)}px`,
-}))
 const {
   loading,
   accounts,
@@ -208,9 +194,8 @@ const {
       <template #body>
         <div class="flex min-h-0 flex-col xl:h-full">
           <BaseTable
-            class="h-100! min-h-100 flex-none [--cp-table-row-height:72px] max-sm:[&>div>div>.overflow-auto]:scroll-pl-(--account-table-sticky-width) xl:h-auto! xl:min-h-0 xl:flex-1"
-            :style="tableScrollStyle"
-            :columns="visibleAccountColumns"
+            class="h-100! min-h-100 flex-none [--cp-table-row-height:72px] xl:h-auto! xl:min-h-0 xl:flex-1"
+            :columns="accountColumns"
             :rows="accounts"
             :loading="loading"
             :selected-row-keys="selectedRowKeys"
@@ -287,10 +272,6 @@ const {
 
             <template #lastUsedAt="{ row }">
               <LastUsedAtCell :value="row.usage.lastUsedAt" />
-            </template>
-
-            <template #subscription="{ row }">
-              <AccountSubscriptionCell :subscription="row.subscription" />
             </template>
 
             <template #actions="{ row }">

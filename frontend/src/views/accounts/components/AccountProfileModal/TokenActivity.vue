@@ -34,7 +34,7 @@ const monthLabels = computed(() =>
 </script>
 
 <template>
-  <section aria-labelledby="profile-token-activity-title">
+  <section class="min-w-0" aria-labelledby="profile-token-activity-title">
     <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
       <div>
         <h3 id="profile-token-activity-title" class="m-0 text-cp-lg font-heavy text-cp-text">
@@ -47,7 +47,7 @@ const monthLabels = computed(() =>
     <BaseEmpty
       v-if="dailyUsage === null"
       title="暂无 Token 活动"
-      description="官方个人资料没有返回每日 Token 活动。"
+      description="本次未获取到每日 Token 活动。"
       size="sm"
       surface="none"
     />
@@ -55,10 +55,11 @@ const monthLabels = computed(() =>
     <div v-else class="overflow-x-auto pb-1" role="img" :aria-label="`Token 活动热力图，${rangeLabel}`">
       <div class="min-w-190">
         <div class="mb-1.5 grid gap-1" style="grid-template-columns: repeat(52, minmax(0, 1fr))">
+          <!-- 首尾月份可能只占一周；标签固定在同一行，避免跨列占位触发自动换行。 -->
           <span
             v-for="(month, monthIndex) in monthLabels"
             :key="`${month.weekIndex}-${month.label}`"
-            class="h-4 whitespace-nowrap text-[10px] leading-4 font-semibold text-cp-text-quaternary"
+            class="row-start-1 h-4 whitespace-nowrap text-[10px] leading-4 font-semibold text-cp-text-quaternary"
             :class="monthIndex === monthLabels.length - 1 ? 'text-right' : undefined"
             :style="{
               gridColumn: `${month.weekIndex + (monthIndex === monthLabels.length - 1 ? 0 : 1)} / span 2`,

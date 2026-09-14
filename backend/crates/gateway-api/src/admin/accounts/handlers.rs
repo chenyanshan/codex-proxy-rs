@@ -23,12 +23,12 @@ where
         )
         .route("/api/admin/accounts/quota", get(account_quota::<S>))
         .route(
-            "/api/admin/accounts/quota-forecast",
-            get(account_quota_forecast::<S>),
+            "/api/admin/accounts/personal-info",
+            get(account_personal_info::<S>),
         )
         .route(
-            "/api/admin/accounts/profile-statistics",
-            get(account_profile_statistics::<S>),
+            "/api/admin/accounts/quota-forecast",
+            get(account_quota_forecast::<S>),
         )
         .route(
             "/api/admin/accounts/profile-avatar",
@@ -389,7 +389,7 @@ where
     ))
 }
 
-async fn account_profile_statistics<S>(
+async fn account_personal_info<S>(
     _auth: AdminAuth,
     State(state): State<S>,
     AdminQuery(query): AdminQuery<AccountIdQuery>,
@@ -401,12 +401,12 @@ where
     let result = state
         .admin_services()
         .accounts()
-        .profile_statistics(&account_id)
+        .personal_info(&account_id)
         .await
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(AccountProfileStatisticsData::from(result)),
+        AdminEnvelope::ok(AccountPersonalInfoData::from(result)),
     ))
 }
 

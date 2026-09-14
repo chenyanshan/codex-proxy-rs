@@ -3,18 +3,18 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 use super::{CodexBackendClient, CodexRequestContext, client::read_capped_response_body};
 
-pub(crate) const SUBSCRIPTION_FIELD: &str = "subscription";
 const MAX_SUBSCRIPTION_BODY_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexSubscription {
-    pub account_id: String,
+    pub starts_at: Option<DateTime<Utc>>,
     pub expires_at: DateTime<Utc>,
     pub will_renew: Option<bool>,
+    pub billing_period: Option<String>,
+    pub billing_currency: Option<String>,
     pub observed_at: DateTime<Utc>,
 }
 
@@ -67,9 +67,15 @@ impl CodexBackendClient {
                     .ok()?
                     .with_timezone(&Utc);
             Some(CodexSubscription {
-                account_id: account_id.to_owned(),
+                starts_at: value
+                    .get("active_start")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| DateTime::parse_from_rfc3339(value.trim()).ok())
+                    .map(|value| value.with_timezone(&Utc)),
                 expires_at,
                 will_renew: value.get("will_renew").and_then(serde_json::Value::as_bool),
+                billing_period: optional_short_text(&value, "billing_period"),
+                billing_currency: optional_short_text(&value, "billing_currency"),
                 observed_at: Utc::now(),
             })
         })
@@ -77,4 +83,15 @@ impl CodexBackendClient {
         .ok()
         .flatten()
     }
+}
+
+fn optional_short_text(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control)
+        })
+        .map(str::to_owned)
 }

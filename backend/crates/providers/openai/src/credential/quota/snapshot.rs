@@ -114,7 +114,6 @@ pub struct CodexAccountQuotaSnapshot {
     credential_revision: CredentialRevision,
     observed_at: SystemTime,
     plan_type: Option<String>,
-    subscription: Option<crate::transport::subscription::CodexSubscription>,
     fact: CodexQuotaFact,
     quota: QuotaState,
     windows: Vec<CodexQuotaWindow>,
@@ -141,11 +140,6 @@ impl CodexAccountQuotaSnapshot {
     #[must_use]
     pub fn plan_type(&self) -> Option<&str> {
         self.plan_type.as_deref()
-    }
-
-    #[must_use]
-    pub fn subscription(&self) -> Option<&crate::transport::subscription::CodexSubscription> {
-        self.subscription.as_ref()
     }
 
     #[must_use]
@@ -352,9 +346,6 @@ pub(crate) fn parse_account_quota_snapshot(
         account_id,
         credential_revision,
         observed_at,
-        subscription: object
-            .get(crate::transport::subscription::SUBSCRIPTION_FIELD)
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
         plan_type: object
             .get("plan_type")
             .and_then(Value::as_str)

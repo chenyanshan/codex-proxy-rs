@@ -38,8 +38,10 @@ use gateway_admin::{
             PrepareCredentialRefresh, PrepareCredentialRotation, PreparedAuthorizationCommit,
             PreparedAuthorizationCredential, PreparedCredentialCreate, PreparedCredentialImport,
             PreparedCredentialRotation, PreparedCredentialRotationFacts, ProviderDocument,
-            ProviderExport, ProviderExportCredentialInput, ProviderModels, ProviderQuota,
-            ProviderQuotaRequest, ProviderQuotaWindow, ProviderResetCreditResult,
+            ProviderExport, ProviderExportCredentialInput, ProviderModels,
+            ProviderProfileActivityInsights, ProviderProfileStatistics,
+            ProviderProfileStatisticsSummary, ProviderQuota, ProviderQuotaRequest,
+            ProviderQuotaWindow, ProviderResetCreditResult, ProviderSubscription,
             QuotaLocalUsageAttribution,
         },
         quota_forecast_sampling::{QuotaForecastHistory, QuotaForecastUsage},
@@ -77,6 +79,9 @@ pub(super) struct FakeProviderAdmin {
     quota_refresh_account: Mutex<Option<(Arc<FakeAccountStore>, AccountRecord)>>,
     current_credential_revision: Mutex<Revision>,
     reset_credit_commands: Mutex<Vec<ConsumeProviderResetCredit>>,
+    profile_result: Mutex<Result<ProviderProfileStatistics, ProviderAdminErrorKind>>,
+    subscription_result: Mutex<Result<Option<ProviderSubscription>, ProviderAdminErrorKind>>,
+    personal_info_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
 }
 
 impl FakeProviderAdmin {
@@ -97,11 +102,22 @@ impl FakeProviderAdmin {
             quota_refresh_account: Mutex::new(None),
             current_credential_revision: Mutex::new(revision(1)),
             reset_credit_commands: Mutex::new(Vec::new()),
+            profile_result: Mutex::new(Ok(empty_profile_statistics())),
+            subscription_result: Mutex::new(Ok(None)),
+            personal_info_barrier: Mutex::new(None),
         })
     }
 
     pub(super) fn fail_next(&self, kind: ProviderAdminErrorKind) {
         *self.failure.lock().expect("provider failure") = Some(ProviderAdminError::new(kind));
+    }
+
+    async fn wait_personal_info_queries(&self) {
+        let barrier = self.personal_info_barrier.lock().unwrap().clone();
+        if let Some(barrier) = barrier {
+            barrier.wait().await;
+            barrier.wait().await;
+        }
     }
 
     fn fail_next_with_message(&self, kind: ProviderAdminErrorKind, message: &str) {
@@ -235,6 +251,32 @@ impl FakeProviderAdmin {
 impl ProviderAdmin for FakeProviderAdmin {
     fn provider_kind(&self) -> &ProviderKind {
         &self.kind
+    }
+
+    async fn profile_statistics(
+        &self,
+        _: &ProviderAccountId,
+    ) -> Result<ProviderProfileStatistics, ProviderAdminError> {
+        self.record("provider.profile_statistics");
+        self.wait_personal_info_queries().await;
+        self.profile_result
+            .lock()
+            .unwrap()
+            .clone()
+            .map_err(ProviderAdminError::new)
+    }
+
+    async fn subscription(
+        &self,
+        _: &ProviderAccountId,
+    ) -> Result<Option<ProviderSubscription>, ProviderAdminError> {
+        self.record("provider.subscription");
+        self.wait_personal_info_queries().await;
+        self.subscription_result
+            .lock()
+            .unwrap()
+            .clone()
+            .map_err(ProviderAdminError::new)
     }
 
     fn plan_type_display(&self, plan_type: &str) -> String {
@@ -1473,7 +1515,6 @@ async fn accounts_should_fill_missing_plan_from_quota_without_overriding_known_s
     ] {
         let provider = FakeProviderAdmin::new("openai", events());
         provider.set_quota(ProviderQuota {
-            subscription: None,
             plan_type: quota_plan.map(str::to_owned),
             ..empty_quota()
         });
@@ -1517,7 +1558,6 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
     let events = events();
     let openai = FakeProviderAdmin::new("openai", events.clone());
     openai.set_quota(ProviderQuota {
-        subscription: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -1650,7 +1690,6 @@ async fn accounts_list_should_map_unknown_credential_to_error_not_normal() {
 async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
-        subscription: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -1699,7 +1738,6 @@ async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view()
 async fn accounts_list_should_not_derive_exhaustion_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
-        subscription: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -1836,7 +1874,6 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
     let added = now - TimeDelta::hours(5);
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
-        subscription: None,
         plan_type: Some("pro".to_owned()),
         observed_at: Some(observed),
         windows: vec![ProviderQuotaWindow {
@@ -1916,7 +1953,6 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::hours(1);
     provider.set_quota(ProviderQuota {
-        subscription: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -2074,7 +2110,6 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::days(7);
     provider.set_quota(ProviderQuota {
-        subscription: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -2330,7 +2365,6 @@ pub(super) fn document() -> ProviderDocument {
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
-        subscription: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -2434,6 +2468,167 @@ fn rotation_result(command: CredentialRotationCommit) -> CredentialMutationResul
         credential_revision: Some(revision(
             command.prepared.expected_credential_revision.get() + 1,
         )),
+    }
+}
+
+fn empty_profile_statistics() -> ProviderProfileStatistics {
+    ProviderProfileStatistics {
+        display_name: Some("Preview user".to_owned()),
+        username: None,
+        image_url: None,
+        has_stats_error: false,
+        summary: ProviderProfileStatisticsSummary {
+            total_text_tokens: Some(123),
+            peak_tokens: None,
+            longest_task_duration_ms: None,
+            current_streak_days: None,
+            longest_streak_days: None,
+        },
+        daily_usage: None,
+        activity_insights: ProviderProfileActivityInsights {
+            fast_mode_percent: None,
+            reasoning_effort: None,
+            reasoning_effort_percent: None,
+            skills_explored: None,
+            total_skills_used: None,
+            total_threads: None,
+            invocations: None,
+        },
+    }
+}
+
+fn personal_info_subscription() -> ProviderSubscription {
+    ProviderSubscription {
+        starts_at: None,
+        expires_at: Utc::now(),
+        will_renew: Some(true),
+        billing_period: Some("monthly".to_owned()),
+        billing_currency: Some("USD".to_owned()),
+        observed_at: Utc::now(),
+    }
+}
+
+#[tokio::test]
+async fn personal_info_should_query_both_parts_concurrently_once_on_every_request() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let subscription = personal_info_subscription();
+    *provider.subscription_result.lock().unwrap() = Ok(Some(subscription.clone()));
+    *provider.personal_info_barrier.lock().unwrap() = Some(Arc::new(tokio::sync::Barrier::new(2)));
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = accounts_service(provider, store).await;
+    let account_id = ProviderAccountId::new("acct_test").unwrap();
+
+    for _ in 0..2 {
+        let info = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            services.accounts().personal_info(&account_id),
+        )
+        .await
+        .expect("两项查询应并发执行")
+        .unwrap();
+        assert_eq!(info.profile.unwrap(), empty_profile_statistics());
+        assert_eq!(info.subscription, Some(subscription.clone()));
+    }
+    assert_eq!(
+        recorded(&events),
+        [
+            "store.load_account",
+            "provider.profile_statistics",
+            "provider.subscription",
+            "store.load_account",
+            "store.load_account",
+            "provider.profile_statistics",
+            "provider.subscription",
+            "store.load_account",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn personal_info_should_keep_profile_when_subscription_is_missing_or_fails() {
+    for subscription in [Ok(None), Err(ProviderAdminErrorKind::Unavailable)] {
+        let provider = FakeProviderAdmin::new("openai", events());
+        *provider.subscription_result.lock().unwrap() = subscription;
+        let services = accounts_service(provider, FakeAccountStore::new("openai", events())).await;
+        let info = services
+            .accounts()
+            .personal_info(&ProviderAccountId::new("acct_test").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(info.profile.unwrap(), empty_profile_statistics());
+        assert_eq!(info.subscription, None);
+    }
+}
+
+#[tokio::test]
+async fn personal_info_should_keep_subscription_when_profile_fails() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    *provider.profile_result.lock().unwrap() = Err(ProviderAdminErrorKind::BadGateway);
+    let subscription = personal_info_subscription();
+    *provider.subscription_result.lock().unwrap() = Ok(Some(subscription.clone()));
+    let services = accounts_service(provider, FakeAccountStore::new("openai", events())).await;
+    let info = services
+        .accounts()
+        .personal_info(&ProviderAccountId::new("acct_test").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        info.profile.unwrap_err().kind(),
+        gateway_admin::model::AdminErrorKind::BadGateway
+    );
+    assert_eq!(info.subscription, Some(subscription));
+}
+
+#[tokio::test]
+async fn personal_info_should_reject_missing_account_before_querying_provider() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    store.set_accounts(Vec::new());
+    let services = accounts_service(provider, store).await;
+    let error = services
+        .accounts()
+        .personal_info(&ProviderAccountId::new("acct_test").unwrap())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), gateway_admin::model::AdminErrorKind::NotFound);
+    assert_eq!(recorded(&events), ["store.load_account"]);
+}
+
+#[tokio::test]
+async fn personal_info_should_discard_results_when_account_changes_during_query() {
+    for change in 0..5 {
+        let provider = FakeProviderAdmin::new("openai", events());
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        *provider.personal_info_barrier.lock().unwrap() = Some(barrier.clone());
+        let store = FakeAccountStore::new("openai", events());
+        let services = accounts_service(provider, store.clone()).await;
+        let account_id = ProviderAccountId::new("acct_test").unwrap();
+        let mutate = async {
+            barrier.wait().await;
+            let mut accounts = store.accounts.lock().unwrap().clone();
+            match change {
+                0 => accounts[0].credential_revision = revision(99),
+                1 => accounts[0].upstream_account_id = Some("changed-account".to_owned()),
+                2 => accounts[0].upstream_user_id = Some("changed-user".to_owned()),
+                3 => accounts[0].provider_kind = ProviderKind::new("xai").unwrap(),
+                _ => accounts.clear(),
+            }
+            store.set_accounts(accounts);
+            barrier.wait().await;
+        };
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::join!(services.accounts().personal_info(&account_id), mutate)
+        })
+        .await
+        .unwrap();
+        let expected = if change == 4 {
+            gateway_admin::model::AdminErrorKind::NotFound
+        } else {
+            gateway_admin::model::AdminErrorKind::Conflict
+        };
+        assert_eq!(result.unwrap_err().kind(), expected);
     }
 }
 

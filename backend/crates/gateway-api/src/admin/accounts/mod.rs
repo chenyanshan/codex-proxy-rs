@@ -25,14 +25,15 @@ use gateway_admin::model::{
         AccountWeight, AccountsUpdateResult, BatchUpdateAccounts, SortDirection, UpdateAccount,
     },
     provider_credentials::{
-        AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
-        AccountUsagePeriod, AuthorizationStarted, CompleteAuthorization,
+        AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountPersonalInfo,
+        AccountRefreshResult, AccountUsagePeriod, AuthorizationStarted, CompleteAuthorization,
         ConsumeProviderResetCredit, CredentialDeletion, CredentialDeletionResult,
         CredentialImportResult, CredentialMutation, CredentialMutationResult, ImportCredentials,
         ProviderDocument, ProviderModels, ProviderProfileActivityInsights, ProviderProfileAvatar,
         ProviderProfileDailyUsage, ProviderProfileInvocation, ProviderProfileStatistics,
         ProviderProfileStatisticsSummary, ProviderQuota, ProviderQuotaWindow, ProviderResetCredit,
-        ProviderResetCreditResult, ProviderResetCredits, RotateCredential, StartAuthorization,
+        ProviderResetCreditResult, ProviderResetCredits, ProviderSubscription, RotateCredential,
+        StartAuthorization,
     },
 };
 use gateway_core::{

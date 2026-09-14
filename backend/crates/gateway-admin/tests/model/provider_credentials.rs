@@ -9,24 +9,6 @@ use gateway_core::routing::ProviderKind;
 use serde_json::{Value, json};
 
 #[test]
-fn subscription_is_bound_to_the_final_account_identity() {
-    let mut quota = usage_quota(vec![]);
-    let date = "2026-12-01T00:00:00Z".parse().unwrap();
-    quota.subscription = Some(
-        gateway_admin::model::provider_credentials::ProviderSubscription {
-            upstream_account_id: "account-a".to_owned(),
-            expires_at: date,
-            will_renew: Some(true),
-            observed_at: date,
-        },
-    );
-    quota.retain_subscription_for_account(Some("account-a"));
-    assert!(quota.subscription.is_some());
-    quota.retain_subscription_for_account(Some("account-b"));
-    assert!(quota.subscription.is_none());
-}
-
-#[test]
 fn usage_window_should_prefer_weekly_without_changing_dashboard_selection() {
     let quota = usage_quota(vec![
         usage_window("short", "shortTerm", 18_000),
@@ -102,7 +84,6 @@ fn selected_usage_window(quota: &ProviderQuota) -> Option<(&str, AccountUsagePer
 
 fn usage_quota(windows: Vec<ProviderQuotaWindow>) -> ProviderQuota {
     ProviderQuota {
-        subscription: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -152,7 +133,6 @@ fn usage_window(key: &str, group: &str, seconds: u64) -> ProviderQuotaWindow {
 #[test]
 fn dashboard_quota_should_preserve_unknown_and_actual_window_facts() {
     let mut quota = ProviderQuota {
-        subscription: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,

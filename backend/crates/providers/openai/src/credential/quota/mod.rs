@@ -709,7 +709,7 @@ impl CodexCredentialQuotaService {
         );
         for account in accounts {
             let observed_at = SystemTime::now();
-            match self.fetch_usage(&client, &account, true).await {
+            match self.fetch_usage(&client, &account).await {
                 Ok(FetchedCodexQuota { account, value }) => {
                     // 单账号解析或落库失败只影响该账号；其余账号继续同步。
                     if let Err(error) = self
@@ -1065,14 +1065,7 @@ impl CodexCredentialQuotaService {
             self.base_url.clone(),
             self.profile.clone(),
         );
-        let FetchedCodexQuota { account, value } = match self
-            .fetch_usage(
-                &client,
-                &account,
-                matches!(authority, QuotaRefreshAuthority::ObserveAccess),
-            )
-            .await
-        {
+        let FetchedCodexQuota { account, value } = match self.fetch_usage(&client, &account).await {
             Ok(fetched) => fetched,
             Err(CodexQuotaFetchError::InvalidCredential) => {
                 return Err(CodexCredentialQuotaError::InvalidCredentialData);
@@ -1160,19 +1153,6 @@ impl CodexCredentialQuotaService {
             .await?
             == QuotaWriteOutcome::Conflict
         {
-            // 可选订阅查询期间可能已有更晚的被动额度观测。保留那份事实，
-            // 不能把旧 usage 改成新时间重写，也不能把同修订观测竞争误报成凭据更新。
-            let current = self
-                .store
-                .get_account(account.id())
-                .await?
-                .ok_or(CodexCredentialQuotaError::NotFound)?;
-            if current.revision() == account.revision()
-                && let Some(newer) = self.read_snapshot_for(&current).await?
-                && newer.observed_at() > observed_at
-            {
-                return Ok(newer);
-            }
             return Err(CodexCredentialQuotaError::RevisionConflict);
         }
         self.scheduling.observe(&snapshot);
@@ -1205,7 +1185,6 @@ impl CodexCredentialQuotaService {
         &self,
         client: &CodexBackendClient,
         account: &ProviderAccount,
-        include_subscription: bool,
     ) -> Result<FetchedCodexQuota, CodexQuotaFetchError> {
         let credential = self
             .repository
@@ -1218,34 +1197,10 @@ impl CodexCredentialQuotaService {
         };
         let result = fetch_usage_with_5xx_retry(client, &prepared).await;
         match result {
-            Ok(mut value) => {
-                if let Some(object) = value.as_object_mut() {
-                    // 上游 usage 不拥有本地订阅字段；不能把响应里的同名内容当作安全事实。
-                    object.remove(crate::transport::subscription::SUBSCRIPTION_FIELD);
-                    let subscription = if include_subscription {
-                        fetch_subscription_once(client, &prepared).await
-                    } else {
-                        // 推理故障恢复不增加可选网络请求，并保留订阅自己的观测时刻。
-                        self.read_snapshot_for(&prepared.account)
-                            .await
-                            .ok()
-                            .flatten()
-                            .and_then(|snapshot| snapshot.subscription().cloned())
-                    };
-                    if let Some(subscription) = subscription
-                        && let Ok(subscription) = serde_json::to_value(subscription)
-                    {
-                        object.insert(
-                            crate::transport::subscription::SUBSCRIPTION_FIELD.to_owned(),
-                            subscription,
-                        );
-                    }
-                }
-                Ok(FetchedCodexQuota {
-                    account: prepared.account,
-                    value,
-                })
-            }
+            Ok(value) => Ok(FetchedCodexQuota {
+                account: prepared.account,
+                value,
+            }),
             Err(CodexQuotaFetchAttemptError::InvalidCredential) => {
                 Err(CodexQuotaFetchError::InvalidCredential)
             }
@@ -1257,32 +1212,6 @@ impl CodexCredentialQuotaService {
             }
         }
     }
-}
-
-async fn fetch_subscription_once(
-    client: &CodexBackendClient,
-    prepared: &PreparedCodexRuntimeCredential,
-) -> Option<crate::transport::subscription::CodexSubscription> {
-    let account_id = prepared.account.upstream_account_id()?;
-    let authorization = prepared
-        .credential
-        .authentication
-        .authorization_header()
-        .ok()?;
-    let request_id = format!("subscription_{}", Uuid::now_v7().simple());
-    client
-        .for_account(&prepared.account)
-        .ok()?
-        .fetch_subscription(
-            CodexRequestContext::auxiliary(
-                authorization.expose_secret(),
-                Some(account_id),
-                &request_id,
-                None,
-            ),
-            account_id,
-        )
-        .await
 }
 
 async fn list_reset_credits_once(

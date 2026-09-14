@@ -26,7 +26,9 @@ async fn subscription_uses_exact_bound_account_and_projects_only_safe_facts() {
         .and(header("origin", server.uri()))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id":"subscription-not-account", "plan_type":"enterprise", "secret":"ignored",
-            "active_until":" 2020-01-02T08:00:00+08:00 ", "will_renew":true
+            "active_start":"2019-12-02T08:00:00+08:00",
+            "active_until":" 2020-01-02T08:00:00+08:00 ", "will_renew":true,
+            "billing_period":"monthly", "billing_currency":"USD"
         })))
         .expect(1)
         .mount(&server)
@@ -43,13 +45,14 @@ async fn subscription_uses_exact_bound_account_and_projects_only_safe_facts() {
         )
         .await
         .unwrap();
-    assert_eq!(result.account_id, account);
+    assert_eq!(
+        result.starts_at.unwrap().to_rfc3339(),
+        "2019-12-02T00:00:00+00:00"
+    );
+    assert_eq!(result.billing_period.as_deref(), Some("monthly"));
+    assert_eq!(result.billing_currency.as_deref(), Some("USD"));
     assert_eq!(result.expires_at.to_rfc3339(), "2020-01-02T00:00:00+00:00");
     assert_eq!(result.will_renew, Some(true));
-    let safe = serde_json::to_value(result).unwrap();
-    assert!(safe.get("secret").is_none());
-    assert!(safe.get("plan_type").is_none());
-    assert!(safe.get("id").is_none());
 }
 
 #[tokio::test]

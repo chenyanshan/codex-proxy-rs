@@ -19,7 +19,7 @@ use crate::model::provider_credentials::{
     PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedCredentialImport,
     PreparedCredentialRotation, ProviderExport, ProviderExportCredentialInput, ProviderModels,
     ProviderProfileAvatar, ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest,
-    ProviderResetCreditResult, ProviderResetCredits, explicit_plan_type,
+    ProviderResetCreditResult, ProviderResetCredits, ProviderSubscription, explicit_plan_type,
 };
 use crate::model::{
     provider_credentials::{ProviderDocument, ProviderQuotaWindow},
@@ -185,6 +185,14 @@ pub trait ProviderAdmin: Send + Sync {
     }
 
     /// 查询 Provider 官方个人资料统计；不支持该能力的 Provider 使用默认拒绝。
+    /// 只由个人信息显式查询，不在额度刷新或后台任务中预取。
+    async fn subscription(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<Option<ProviderSubscription>, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
     async fn profile_statistics(
         &self,
         _account_id: &ProviderAccountId,

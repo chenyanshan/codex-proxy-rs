@@ -24,7 +24,7 @@ use gateway_admin::model::provider_credentials::{
     ProviderProfileAvatar, ProviderProfileAvatarStreamError, ProviderProfileDailyUsage,
     ProviderProfileInvocation, ProviderProfileStatistics, ProviderProfileStatisticsSummary,
     ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow, ProviderQuotaWindowRole,
-    ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits,
+    ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits, ProviderSubscription,
     QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::quota_forecast_sampling::QuotaForecastObservation;
@@ -513,6 +513,27 @@ impl ProviderAdmin for OpenAiAdminProvider {
         })
     }
 
+    async fn subscription(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<Option<ProviderSubscription>, ProviderAdminError> {
+        self.account(account_id).await?;
+        self.profile_statistics
+            .subscription(account_id)
+            .await
+            .map(|subscription| {
+                subscription.map(|subscription| ProviderSubscription {
+                    starts_at: subscription.starts_at,
+                    expires_at: subscription.expires_at,
+                    will_renew: subscription.will_renew,
+                    billing_period: subscription.billing_period,
+                    billing_currency: subscription.billing_currency,
+                    observed_at: subscription.observed_at,
+                })
+            })
+            .map_err(map_profile_statistics_error)
+    }
+
     async fn profile_statistics(
         &self,
         account_id: &ProviderAccountId,
@@ -827,7 +848,6 @@ fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> 
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
-        subscription: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -842,16 +862,13 @@ fn project_quota(
     account: &ProviderAccount,
 ) -> ProviderQuota {
     let mut quota = snapshot
-        .map(|snapshot| project_quota_snapshot(snapshot, account.upstream_account_id()))
+        .map(project_quota_snapshot)
         .unwrap_or_else(empty_quota);
     quota.limit_reached = account.quota().is_exhausted();
     quota
 }
 
-fn project_quota_snapshot(
-    snapshot: CodexAccountQuotaSnapshot,
-    upstream_account_id: Option<&str>,
-) -> ProviderQuota {
+fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota {
     let mut provider_data = Map::new();
     provider_data.insert(
         "remaining_percent".to_owned(),
@@ -892,17 +909,6 @@ fn project_quota_snapshot(
     // 在窗口全部过期后继续维持限流。
     let limit_reached = quota_windows_limit_reached(&windows);
     ProviderQuota {
-        subscription: snapshot
-            .subscription()
-            .filter(|subscription| Some(subscription.account_id.as_str()) == upstream_account_id)
-            .map(
-                |subscription| gateway_admin::model::provider_credentials::ProviderSubscription {
-                    upstream_account_id: subscription.account_id.clone(),
-                    expires_at: subscription.expires_at,
-                    will_renew: subscription.will_renew,
-                    observed_at: subscription.observed_at,
-                },
-            ),
         plan_type: snapshot.plan_type().map(str::to_owned),
         observed_at: Some(DateTime::<Utc>::from(snapshot.observed_at())),
         refresh_token_expires_at: None,

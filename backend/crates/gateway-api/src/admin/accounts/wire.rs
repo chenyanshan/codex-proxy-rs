@@ -250,7 +250,6 @@ pub struct AccountView {
     pub plan_type: Option<String>,
     /// 后端生成的套餐展示名称；缺失套餐时为“未知套餐”。
     pub plan_type_display: String,
-    pub subscription: Option<AccountSubscriptionView>,
     pub authentication_kind: String,
     pub has_refresh_token: bool,
     pub status: String,
@@ -329,21 +328,11 @@ pub struct AccountGroupRefView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaView {
-    pub subscription: Option<AccountSubscriptionView>,
     pub refreshed_at_display: String,
     pub limit_reached: bool,
     /// 429 临时限流（Redis 冷却）到期时间展示；非限流中为 `null`。
     pub rate_limited_until: Option<String>,
     pub windows: Vec<AccountQuotaWindowView>,
-}
-
-/// 与令牌有效期区分的订阅本周期结束事实。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountSubscriptionView {
-    pub expires_at: String,
-    pub will_renew: Option<bool>,
-    pub observed_at: String,
 }
 
 /// 一个 quota 时间窗口。
@@ -662,6 +651,54 @@ pub struct AccountRefreshData {
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountQuotaData {
     pub account: AccountView,
+}
+
+/// 个人资料、累计统计与订阅的统一响应。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountPersonalInfoData {
+    pub profile: Option<AccountProfileStatisticsData>,
+    pub profile_error: Option<String>,
+    pub subscription: Option<AccountSubscriptionData>,
+}
+
+impl From<AccountPersonalInfo> for AccountPersonalInfoData {
+    fn from(info: AccountPersonalInfo) -> Self {
+        let (profile, profile_error) = match info.profile {
+            Ok(profile) => (Some(AccountProfileStatisticsData::from(profile)), None),
+            Err(error) => (None, Some(error.message().to_owned())),
+        };
+        Self {
+            profile,
+            profile_error,
+            subscription: info.subscription.map(AccountSubscriptionData::from),
+        }
+    }
+}
+
+/// 按需读取的订阅安全字段，不暴露原始上游响应。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSubscriptionData {
+    pub starts_at: Option<String>,
+    pub expires_at: String,
+    pub will_renew: Option<bool>,
+    pub billing_period: Option<String>,
+    pub billing_currency: Option<String>,
+    pub observed_at: String,
+}
+
+impl From<ProviderSubscription> for AccountSubscriptionData {
+    fn from(subscription: ProviderSubscription) -> Self {
+        Self {
+            starts_at: subscription.starts_at.map(|value| value.to_rfc3339()),
+            expires_at: subscription.expires_at.to_rfc3339(),
+            will_renew: subscription.will_renew,
+            billing_period: subscription.billing_period,
+            billing_currency: subscription.billing_currency,
+            observed_at: subscription.observed_at.to_rfc3339(),
+        }
+    }
 }
 
 /// Provider 官方个人资料统计响应。

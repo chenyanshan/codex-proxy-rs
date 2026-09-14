@@ -63,9 +63,8 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         plan_type_display,
         projection,
         usage,
-        mut quota,
+        quota,
     } = item;
-    quota.retain_subscription_for_account(account.upstream_account_id.as_deref());
     let status = projection.status.as_str().to_owned();
     let rate_limited_until = projection.rate_limited_until.map(DateTime::<Utc>::from);
     let expires_at = account.access_token_expires_at.as_ref().map(china_rfc3339);
@@ -94,7 +93,6 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         label: None,
         plan_type: account.plan_type,
         plan_type_display: plan_type_display.unwrap_or_else(|| "未知套餐".to_owned()),
-        subscription: quota.subscription.clone(),
         authentication_kind: account.authentication_kind,
         has_refresh_token: account.has_refresh_token,
         status,
@@ -199,13 +197,6 @@ pub(super) fn account_quota_view(
     let rate_limited_until = rate_limited_until.map(|until| china_datetime(&until));
     (
         AccountQuotaView {
-            subscription: quota
-                .subscription
-                .map(|subscription| AccountSubscriptionView {
-                    expires_at: china_rfc3339(&subscription.expires_at),
-                    will_renew: subscription.will_renew,
-                    observed_at: china_rfc3339(&subscription.observed_at),
-                }),
             refreshed_at_display,
             limit_reached: quota.limit_reached,
             rate_limited_until,

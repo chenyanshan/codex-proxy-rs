@@ -13,6 +13,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::transport::profile::CodexWireProfileState;
+use crate::transport::subscription::CodexSubscription;
 use crate::transport::{
     CodexBackendClient, CodexClientError, CodexProfileAvatar, CodexProfileAvatarFetchError,
     CodexProfileStatistics, CodexRequestContext, fetch_profile_avatar,
@@ -127,6 +128,53 @@ impl CodexCredentialProfileService {
             base_url,
             avatar_sources: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 订阅只按需读取；不缓存、不刷新凭据，也不更新额度状态。
+    pub async fn subscription(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<Option<CodexSubscription>, CodexProfileStatisticsError> {
+        let (authorization, upstream_account_id, account) =
+            self.account_authentication(account_id).await?;
+        let Some(upstream_account_id) = upstream_account_id else {
+            return Ok(None);
+        };
+        let request_id = format!("subscription_{}", Uuid::now_v7().simple());
+        let subscription = CodexBackendClient::new(
+            self.http.clone(),
+            self.base_url.clone(),
+            self.profile.clone(),
+        )
+        .for_account(&account)
+        .map_err(map_client_error)?
+        .fetch_subscription(
+            CodexRequestContext::auxiliary(
+                authorization.expose_secret(),
+                Some(&upstream_account_id),
+                &request_id,
+                None,
+            ),
+            &upstream_account_id,
+        )
+        .await;
+        // 请求期间重新授权、换绑或删除账号时，丢弃旧身份的结果。
+        let current = self
+            .repository
+            .store()
+            .get_account(account_id)
+            .await
+            .map_err(|error| CodexProfileStatisticsError::Store {
+                detail: error.to_string(),
+            })?;
+        if !current.is_some_and(|current| {
+            current.provider() == account.provider()
+                && current.revision() == account.revision()
+                && current.upstream_account_id() == Some(upstream_account_id.as_str())
+        }) {
+            return Ok(None);
+        }
+        Ok(subscription)
     }
 
     pub async fn profile_statistics(

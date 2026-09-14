@@ -6,72 +6,69 @@ import { toRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
-import { useAccountProfileStatistics } from '../../composables/useAccountProfileStatistics'
+import { useAccountPersonalInfo } from '../../composables/useAccountPersonalInfo'
 import AccountProfileActivityInsights from './ActivityInsights.vue'
+import AccountProfileMetrics from './Metrics.vue'
 import AccountProfileHero from './ProfileHero.vue'
 import AccountProfileSkeleton from './Skeleton.vue'
+import AccountSubscription from './Subscription.vue'
 import AccountProfileTokenActivity from './TokenActivity.vue'
 
-const props = defineProps<{
-  account: AccountRow
-}>()
+const props = defineProps<{ account: AccountRow }>()
 const open = defineModel<boolean>({ required: true })
 const accountId = toRef(() => props.account.id)
-const { profile, loading, error, load } = useAccountProfileStatistics(accountId, open)
+const { profile, subscription, loading, error, load } = useAccountPersonalInfo(accountId, open)
 </script>
 
 <template>
-  <BaseModal
-    v-model="open"
-    title="个人资料"
-    description="来自 Codex 官方个人资料的累计活动与使用洞察"
-    size="xl"
-  >
-    <AccountProfileSkeleton v-if="loading && !profile" />
+  <BaseModal v-model="open" title="个人信息" size="xl">
+    <div class="flex min-h-0 min-w-0 flex-col gap-6 pb-2">
+      <div class="grid min-w-0 grid-cols-1 gap-4 rounded-cp-lg bg-cp-fill-alter p-4 sm:p-5 lg:grid-cols-[minmax(310px,1.05fr)_minmax(0,1.95fr)] lg:items-center">
+        <AccountProfileHero :account="account" :profile="profile" />
+        <AccountProfileMetrics :profile="profile" :loading="loading" />
+      </div>
 
-    <BaseEmpty
-      v-else-if="error && !profile"
-      title="个人资料加载失败"
-      :description="error"
-      :icon="TriangleAlert"
-      surface="none"
-    >
-      <template #action>
-        <BaseButton size="sm" :loading="loading" @click="load(true)">
-          重试
-        </BaseButton>
-      </template>
-    </BaseEmpty>
+      <section v-if="subscription" class="grid min-w-0 grid-cols-1 gap-4" aria-labelledby="profile-subscription-title">
+        <h3 id="profile-subscription-title" class="m-0 text-cp font-heavy text-cp-text">
+          订阅信息
+        </h3>
+        <AccountSubscription :subscription="subscription" />
+      </section>
 
-    <div v-else-if="profile" class="flex min-h-0 flex-col gap-8 pb-2 sm:gap-10">
-      <AccountProfileHero :account="account" :profile="profile" />
-
+      <AccountProfileSkeleton v-if="loading && !profile" />
       <BaseEmpty
-        v-if="profile.hasStatsError"
-        title="个人统计暂不可用"
-        description="官方个人资料已加载，但本次没有返回统计数据。"
+        v-else-if="error && !profile"
+        title="个人资料加载失败"
+        :description="error"
         :icon="TriangleAlert"
         surface="none"
       />
-
-      <template v-else>
-        <AccountProfileTokenActivity :daily-usage="profile.dailyUsage" />
-        <AccountProfileActivityInsights :insights="profile.activityInsights" />
+      <template v-else-if="profile">
+        <BaseEmpty
+          v-if="profile.hasStatsError"
+          title="个人统计暂不可用"
+          description="本次未获取到统计数据，可以点击刷新信息重试。"
+          :icon="TriangleAlert"
+          surface="none"
+        />
+        <template v-else>
+          <AccountProfileTokenActivity :daily-usage="profile.dailyUsage" />
+          <AccountProfileActivityInsights :insights="profile.activityInsights" />
+        </template>
+        <p v-if="error" role="status" class="m-0 text-cp-sm text-cp-warning">
+          本次信息刷新未完成，保留已获取的结果。
+        </p>
       </template>
     </div>
-
     <template #footer>
       <BaseButton variant="secondary" @click="open = false">
         关闭
       </BaseButton>
-      <BaseButton :loading="loading" @click="load(true)">
-        <template #loading>
-          <RefreshCw class="size-4 animate-spin motion-reduce:animate-none" />
-        </template>
+      <BaseButton :aria-busy="loading" :aria-disabled="loading" @click="load">
         <template #icon>
-          <RefreshCw class="size-4" />
+          <RefreshCw class="size-4" :class="loading ? 'animate-spin motion-reduce:animate-none' : undefined" />
         </template>
-        刷新资料
+        刷新信息
       </BaseButton>
     </template>
   </BaseModal>

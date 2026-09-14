@@ -256,7 +256,7 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
 | `GET` | `/api/admin/accounts/quota-forecast` | `accountId` | 按需读取周/月容量预测、源窗口剩余估算与采样依据，不刷新上游额度 |
 | `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 访问 Provider 并刷新额度，同时同步额度所属状态 |
-| `GET` | `/api/admin/accounts/profile-statistics` | `accountId` | 实时查询 OpenAI/Codex 官方个人资料中的累计活动与使用洞察 |
+| `GET` | `/api/admin/accounts/personal-info` | `accountId` | 按需汇聚 OpenAI/Codex 官方个人资料、累计活动与订阅信息，不更新额度或 credential |
 | `GET` | `/api/admin/accounts/reset-credits` | `accountId` | 查询 OpenAI 上游主动额度重置卡，不读取本地库存 |
 | `POST` | `/api/admin/accounts/reset-credits` | `{ accountId, creditId?, redeemRequestId }` | 使用 UUIDv4 幂等键消费一张 OpenAI 上游重置卡 |
 | `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取该 Provider + 套餐的模型 cache，缺失时有限实时拉取 |
@@ -451,13 +451,6 @@ OAuth start 使用：
   但上游 authorization code 本身通常只能交换一次；已完成过 token exchange 时应重新创建 OAuth flow。
 - `GET /accounts/quota` 只读取最后一次落库快照；`POST /accounts/quota/refresh` 才访问上游。access token
   已过期时，额度刷新要求先走 credential 刷新或重新授权，不会拿过期 token 探测额度。
-- OpenAI 主动额度刷新成功后，额外查询已绑定账号的订阅周期，列表与 quota 安全视图返回
-  `subscription: { expiresAt, willRenew, observedAt } | null`。时间是 RFC3339 字符串，`willRenew` 可为
-  `true`、`false` 或未知 `null`。`expiresAt` 表示订阅本周期结束，与账号令牌的过期时间独立；自动续费不表示
-  账号将在该时刻不可用。缺失或非法日期、查询失败均返回 `null`，不影响额度刷新、套餐和凭据状态。
-  列表读取不会发订阅请求；订阅时间使用自身的观测时间，普通请求的额度更新不会刷新这个时间。
-  查询期间若已有同凭据修订的更新额度观测，优先返回更新快照，本次订阅补充可能舍弃；订阅为尽力获取，
-  不保证每次刷新都更新，其 `observedAt` 表示实际取得订阅事实的时间。
 - OpenAI 已耗尽账号每 30 分钟主动复核一次，也会在最早未恢复窗口的 `resetAt + 2 分钟` 到期后
   提前复核。后台每 30 秒检查触发条件；同一重置边界复核后仍未恢复时回到 30 分钟重试，
   避免旧 reset 持续触发请求。各窗口独立确认恢复，时间到期本身不会直接解除账号耗尽。
@@ -521,10 +514,26 @@ OpenAI 复用已有限流协议解析器匹配额度桶、槽位、时长和明�
 上游消耗和模型组合变化仍可能造成误差；等价 USD 费用不是官方订阅价格或固定额度承诺，
 30 天折算也不是自然月额度。记录覆盖率不等于预测准确率，不输出未经校准的置信区间。
 
-### OpenAI 官方个人资料统计
+### OpenAI 个人信息
 
-`GET /api/admin/accounts/profile-statistics?accountId=...` 仅支持 OpenAI/Codex OAuth 账号。每次查询直接
-访问官方个人资料端点，不读取本地 usage/billing 记录，也不缓存或估算统计结果。响应 `data` 包含：
+`GET /api/admin/accounts/personal-info?accountId=...` 需要管理员会话，当前由 OpenAI/Codex OAuth
+账号提供。后端并发读取资料统计与订阅，一次返回；每次请求均重新查询，不自动重试或
+刷新 credential，不读取本地 usage/billing 记录，也不缓存或估算统计结果。
+
+响应 `data` 包含：
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `profile` | object 或 null | 官方个人资料、累计统计与活动洞察；查询失败为 null |
+| `profileError` | string 或 null | 资料查询失败时的安全错误提示；成功为 null |
+| `subscription` | object 或 null | 当前绑定账号的订阅周期；无可用周期或查询失败为 null |
+
+两部分的查询结果独立：资料失败时仍返回可用订阅，订阅失败时仍返回资料。账号不存在、查询参数不合法或
+无管理员会话时，仍返回标准错误；请求期间账号身份或 credential revision 改变时拒绝整份结果。
+
+#### 官方资料与累计统计
+
+`profile` 包含：
 
 - `displayName`、`username`、`imageUrl`：官方账号资料；
 - `summary`：累计文本 Token、单日峰值 Token、最长任务时长、当前连续天数和最长连续天数；
@@ -533,7 +542,27 @@ OpenAI 复用已有限流协议解析器匹配额度桶、槽位、时长和明�
   以及插件与 Skill 调用排行。
 
 官方未返回的字段保持 `null`，不使用本地数据补齐；`hasStatsError: true` 表示账号资料可用，但官方统计
-部分不可用。access token 已过期或官方返回 401 时，接口要求先刷新 credential 或重新授权。
+部分不可用。access token 已过期或官方返回 401 时，通过 `profileError` 提示先刷新 credential 或重新授权。
+
+#### 订阅信息
+
+后端使用当前凭据、绑定的上游账号 ID 和账号出站代理访问 `/backend-api/subscriptions?account_id=...`，
+不枚举其他账号，不返回上游订阅 ID 或原始响应。
+
+`subscription` 为 `null`（未获得可用订阅周期），或包含以下字段：
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `startsAt` | RFC 3339 字符串或 null | 上游本期开始时间 |
+| `expiresAt` | RFC 3339 字符串 | 上游本期结束时间，不代表自动续费账号最终失效 |
+| `willRenew` | boolean 或 null | 自动续费状态；未知不推断为 false |
+| `billingPeriod` | string 或 null | 上游计费周期标识 |
+| `billingCurrency` | string 或 null | 上游计费币种 |
+| `observedAt` | RFC 3339 字符串 | 本次查询时间 |
+
+订阅不写入额度快照或数据库，不参与账号状态或调度；单次上游查询最多 5 秒、响应最多 64 KiB，不重试。
+上游失败或未提供有效周期时返回未知，不据此标记免费、过期或禁用；请求期间账号身份或 credential
+revision 变化时丢弃结果。
 
 ### OpenAI 主动额度重置卡
 

@@ -4,34 +4,9 @@ import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
 
 <template>
   <div class="grid gap-8 sm:gap-10" role="status" aria-live="polite" aria-busy="true">
-    <span class="sr-only">正在加载官方个人资料</span>
+    <span class="sr-only">正在加载累计活动</span>
 
-    <section
-      class="grid gap-4 rounded-cp-lg bg-cp-fill-alter p-4 sm:p-5 lg:grid-cols-[minmax(310px,1.05fr)_minmax(0,1.95fr)] lg:items-center lg:gap-4"
-    >
-      <div class="flex min-w-0 items-center gap-3.5">
-        <BaseSkeleton shape="circle" class="size-14 shrink-0" />
-        <div class="grid min-w-0 flex-1 gap-1.5">
-          <div class="flex items-center gap-2">
-            <BaseSkeleton shape="text" class="h-4 w-20" />
-            <BaseSkeleton class="h-5 w-9 rounded-full opacity-70" />
-          </div>
-          <BaseSkeleton shape="text" class="w-24 opacity-60" />
-          <BaseSkeleton shape="text" class="w-full max-w-64 opacity-60" />
-        </div>
-      </div>
-
-      <div class="min-w-0 overflow-x-auto py-1">
-        <div class="grid min-w-130 grid-cols-5">
-          <div v-for="metric in 5" :key="metric" class="grid justify-items-center gap-2 px-2 sm:px-3">
-            <BaseSkeleton shape="text" class="h-4 w-14" />
-            <BaseSkeleton shape="text" class="w-20 opacity-60" />
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="grid gap-4">
+    <section class="grid min-w-0 gap-4 overflow-hidden">
       <div class="flex items-center justify-between">
         <BaseSkeleton shape="text" class="h-4 w-20" />
         <BaseSkeleton class="h-7 w-32 rounded-cp opacity-70" />

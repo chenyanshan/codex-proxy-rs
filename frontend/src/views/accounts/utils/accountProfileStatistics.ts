@@ -61,7 +61,7 @@ export function buildProfileActivityGrid(
     })
     weeks.push({
       key: dateKey(weekStart),
-      monthLabel: monthLabel(weekDates, weekIndex),
+      monthLabel: monthLabel(weekDates),
       cells,
     })
   }
@@ -117,12 +117,10 @@ function activityLevel(value: number, maxValue: number): ProfileActivityLevel {
   return Math.min(4, Math.max(1, Math.ceil(value / maxValue * 4))) as ProfileActivityLevel
 }
 
-function monthLabel(weekDates: Date[], weekIndex: number) {
+function monthLabel(weekDates: Date[]) {
   const firstDayOfMonth = weekDates.find(date => date.getUTCDate() === 1)
-  if (weekIndex !== 0 && !firstDayOfMonth)
-    return null
-  const date = firstDayOfMonth ?? weekDates[0]
-  return `${(date?.getUTCMonth() ?? 0) + 1}月`
+  // 窗口开头不补不完整月份的标签，避免与紧接着的月份挤在一起。
+  return firstDayOfMonth ? `${firstDayOfMonth.getUTCMonth() + 1}月` : null
 }
 
 function localCalendarDate(value: Date) {

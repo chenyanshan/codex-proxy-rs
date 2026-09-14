@@ -22,9 +22,9 @@ use crate::{
         },
         observability::TimeRange,
         provider_credentials::{
-            AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
-            ConsumeProviderResetCredit, PrepareCredentialRefresh, ProviderModels,
-            ProviderProfileAvatar, ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest,
+            AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountPersonalInfo,
+            AccountRefreshResult, ConsumeProviderResetCredit, PrepareCredentialRefresh,
+            ProviderModels, ProviderProfileAvatar, ProviderQuota, ProviderQuotaRequest,
             ProviderQuotaWindow, ProviderResetCreditResult, ProviderResetCredits,
             QuotaLocalUsageAttribution,
         },
@@ -90,11 +90,11 @@ pub trait AccountsService: Send + Sync {
         account_id: &ProviderAccountId,
     ) -> Result<AccountQuotaForecastReport, AdminError>;
 
-    async fn profile_statistics(
+    async fn personal_info(
         &self,
         _account_id: &ProviderAccountId,
-    ) -> Result<ProviderProfileStatistics, AdminError> {
-        Err(AdminError::invalid("当前 Provider 不支持账号统计"))
+    ) -> Result<AccountPersonalInfo, AdminError> {
+        Err(AdminError::invalid("当前 Provider 不支持个人信息"))
     }
 
     async fn profile_avatar(
@@ -680,15 +680,36 @@ impl AccountsService for DefaultAccountsService {
         })
     }
 
-    async fn profile_statistics(
+    async fn personal_info(
         &self,
         account_id: &ProviderAccountId,
-    ) -> Result<ProviderProfileStatistics, AdminError> {
-        let (_, provider) = self.provider_for_account(account_id).await?;
-        provider
-            .profile_statistics(account_id)
-            .await
-            .map_err(|error| map_provider_error(error, "provider profile statistics"))
+    ) -> Result<AccountPersonalInfo, AdminError> {
+        let (initial, provider) = self.provider_for_account(account_id).await?;
+        // 两项读取相互独立；不因其中一项失败而取消另一项，也不触发凭据或额度刷新。
+        let (profile, subscription) = futures::join!(
+            provider.profile_statistics(account_id),
+            provider.subscription(account_id),
+        );
+        let profile =
+            profile.map_err(|error| map_provider_error(error, "provider profile statistics"));
+        let subscription = subscription
+            .map_err(|error| map_provider_error(error, "provider subscription"))
+            .ok()
+            .flatten();
+
+        // 汇聚等待期间发生重新授权、换绑或删除时，不返回混合身份的数据。
+        let current = self.load_account(account_id).await?;
+        if current.account.provider_kind != initial.account.provider_kind
+            || current.account.credential_revision != initial.account.credential_revision
+            || current.account.upstream_user_id != initial.account.upstream_user_id
+            || current.account.upstream_account_id != initial.account.upstream_account_id
+        {
+            return Err(AdminError::conflict("账号身份已变化，请刷新信息后重试"));
+        }
+        Ok(AccountPersonalInfo {
+            profile,
+            subscription,
+        })
     }
 
     async fn profile_avatar(
@@ -848,7 +869,6 @@ fn map_reset_credits_error_after_refresh(
 /// 账号目录中单个账号 quota 读取失败时使用的空额度投影。
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
-        subscription: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,

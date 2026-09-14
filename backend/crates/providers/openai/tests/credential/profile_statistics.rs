@@ -6,7 +6,7 @@ use gateway_core::account::ProviderAccountId;
 use provider_openai::credential::{CodexCredentialProfileService, ImportCodexOAuthCredential};
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::json;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{MemoryAccountStore, profile, secret};
@@ -59,6 +59,11 @@ async fn service(
 #[tokio::test]
 async fn profile_statistics_uses_one_profile_request_and_preserves_official_fields() {
     let server = MockServer::start().await;
+    Mock::given(path("/backend-api/subscriptions"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
     Mock::given(method("GET"))
         .and(path("/api/codex/profiles/me"))
         .and(header(
@@ -226,4 +231,67 @@ async fn profile_avatar_reuses_cached_source_with_the_accounts_rotated_token() {
         avatar_request.headers["chatgpt-account-id"],
         "chatgpt-acct_profile_avatar"
     );
+}
+
+#[tokio::test]
+async fn subscription_is_read_only_and_makes_one_bound_account_request_per_query() {
+    let server = MockServer::start().await;
+    let (store, service) = service("acct_subscription", &server).await;
+    let account = store.account("acct_subscription").expect("account");
+    Mock::given(method("GET"))
+        .and(path("/backend-api/subscriptions"))
+        .and(query_param("account_id", "chatgpt-acct_subscription"))
+        .and(header("chatgpt-account-id", "chatgpt-acct_subscription"))
+        .and(header("authorization", "Bearer token-acct_subscription"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "active_until": "2026-10-01T00:00:00Z", "will_renew": true
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    for _ in 0..2 {
+        let subscription = service.subscription(account.id()).await.unwrap().unwrap();
+        assert_eq!(subscription.will_renew, Some(true));
+    }
+    let after = store.account("acct_subscription").expect("account");
+    assert_eq!(after.revision(), account.revision());
+    assert_eq!(after.quota(), account.quota());
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn subscription_discards_response_when_credential_rotates_during_query() {
+    let server = MockServer::start().await;
+    let (store, service) = service("acct_subscription_rotation", &server).await;
+    let account = store
+        .account("acct_subscription_rotation")
+        .expect("account");
+    let requested = Arc::new(tokio::sync::Notify::new());
+    let notify = Arc::clone(&requested);
+    Mock::given(path("/backend-api/subscriptions"))
+        .respond_with(move |_: &wiremock::Request| {
+            notify.notify_one();
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"active_until": "2026-10-01T00:00:00Z"}))
+                .set_delay(std::time::Duration::from_millis(100))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (result, ()) = tokio::join!(service.subscription(account.id()), async {
+        tokio::time::timeout(std::time::Duration::from_secs(3), requested.notified())
+            .await
+            .unwrap();
+        store
+            .repository()
+            .rotate_refreshed_oauth_secret(
+                &account,
+                secret("rotated-subscription-token"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    });
+    assert!(result.unwrap().is_none());
 }

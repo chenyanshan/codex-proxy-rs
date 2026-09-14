@@ -48,7 +48,7 @@ const profileOpen = shallowRef(false)
       <div class="flex shrink-0 items-center gap-0.5">
         <BaseIconButton
           v-if="account.provider === 'openai'"
-          label="查看个人资料"
+          label="查看个人信息"
           size="sm"
           variant="ghost"
           :pressed="profileOpen"

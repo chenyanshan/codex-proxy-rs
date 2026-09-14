@@ -1,5 +1,6 @@
 mod handlers;
 mod presenter;
+mod wire;
 
 mod query {
     use gateway_admin::model::accounts::{AccountSortField, AccountStatus, SortDirection};

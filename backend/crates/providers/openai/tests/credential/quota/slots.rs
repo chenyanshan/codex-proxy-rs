@@ -257,7 +257,11 @@ async fn worker_detects_early_resets_without_unlocking_other_exhausted_windows()
 
         // 未恢复的周窗口仍在未来，也必须保留复核节流；恢复后则退出定时复核。
         service.synchronize().await.expect("next worker cycle");
-        assert_eq!(usage_request_count(&server).await, 1, "{name}");
+        assert_eq!(
+            server.received_requests().await.expect("requests").len(),
+            1,
+            "{name}"
+        );
     }
 }
 
