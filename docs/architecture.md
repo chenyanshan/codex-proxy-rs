@@ -187,7 +187,10 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 
 - Chat Completions 是 `gateway-api` 的私有协议适配模块：有界解压后把已支持的 Chat 字段转换为
   Responses 输入，再复用同一 `Generate` 执行、鉴权、模型路由、日周预算、并发准入、计量与终结流程。
-  消息和函数调用按原顺序转换，未知或不能兑现的参数在入口返回明确错误，不把原始 Chat 字段透传。
+  消息和函数调用按原顺序转换，各协议对象只投影已知字段并忽略客户端扩展，不递归过滤正文、工具参数
+  或 Schema。常用控制映射后复用 Provider 限制；不能兑现的已知控制返回明确错误。旧函数历史按调用
+  配对，拒绝历史保留为完整输出消息，公开思考文本仅作为普通历史文本。Responses 形状请求复用原解码器，
+  不在 Chat 边界重建其业务字段；两种输入同时存在时拒绝歧义。
   输出从同一 Responses wire 事件转换为 Chat JSON/SSE，复用共享 HTTP driver 的提交、断连取消和
   drain 生命周期；不新增 Core operation、Provider 端点或独立计费路径。
 - OpenAI 是透明边界。Responses 请求保留未知字段和字段顺序；SSE、WebSocket、Images 与 standalone

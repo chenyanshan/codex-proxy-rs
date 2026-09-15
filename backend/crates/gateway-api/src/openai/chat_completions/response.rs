@@ -1,4 +1,4 @@
-//! Responses wire 到 Chat 消息的有状态投影；推理正文不进入 Chat 输出。
+//! Responses wire 到 Chat 消息的有状态投影；仅公开推理摘要进入 Chat 输出。
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use gateway_core::engine::ModelRequestId;
 use gateway_core::event::{GatewayEvent, ProviderEvent};
+use gateway_protocol::openai::events::ResponsesUsageTracker;
 use serde_json::{Value, json};
 
 use crate::openai::responses::{ProtocolError, ProtocolErrorBody};
@@ -23,12 +24,16 @@ pub(in crate::openai) struct ChatEncoder {
     created: u64,
     model: String,
     include_usage: bool,
+    legacy_functions: bool,
     role_sent: bool,
     text: BTreeMap<(u64, u64), String>,
     refusal: BTreeMap<(u64, u64), String>,
+    reasoning: BTreeMap<(u64, u64), String>,
+    item_ids: BTreeMap<String, u64>,
     tools: BTreeMap<u64, Tool>,
     finish_reason: Option<&'static str>,
     usage: Option<Value>,
+    usage_tracker: ResponsesUsageTracker,
     terminal_frames: Vec<Bytes>,
     wire_failure: bool,
     canonical_completed: bool,
@@ -49,16 +54,25 @@ impl ChatEncoder {
                 .as_secs(),
             model,
             include_usage,
+            legacy_functions: false,
             role_sent: false,
             text: BTreeMap::new(),
             refusal: BTreeMap::new(),
+            reasoning: BTreeMap::new(),
+            item_ids: BTreeMap::new(),
             tools: BTreeMap::new(),
             finish_reason: None,
             usage: None,
+            usage_tracker: ResponsesUsageTracker::default(),
             terminal_frames: Vec::new(),
             wire_failure: false,
             canonical_completed: false,
         }
+    }
+
+    pub(in crate::openai) fn with_legacy_functions(mut self, enabled: bool) -> Self {
+        self.legacy_functions = enabled;
+        self
     }
 
     pub(in crate::openai) fn is_completed(&self) -> bool {
@@ -90,6 +104,7 @@ impl ChatEncoder {
             return Ok(frames);
         };
         let data = wire.data();
+        self.usage_tracker.observe(data);
         let event_type = wire
             .event_type()
             .or_else(|| data.get("type").and_then(Value::as_str));
@@ -97,6 +112,38 @@ impl ChatEncoder {
             return Err(invalid_response());
         }
         match event_type {
+            Some("response.reasoning_summary_text.delta") => {
+                let key = (
+                    required_index(data, "output_index")?,
+                    required_index(data, "summary_index")?,
+                );
+                let value = required_str(data, "delta")?;
+                self.reasoning.entry(key).or_default().push_str(value);
+                frames.push(self.delta(json!({"reasoning_content": value})));
+            }
+            Some("response.reasoning_summary_text.done") => {
+                self.reasoning_snapshot(
+                    (
+                        required_index(data, "output_index")?,
+                        required_index(data, "summary_index")?,
+                    ),
+                    required_str(data, "text")?,
+                    &mut frames,
+                )?;
+            }
+            Some("response.reasoning_summary_part.done") => {
+                let part = data.get("part").ok_or_else(invalid_response)?;
+                if part.get("type").and_then(Value::as_str) == Some("summary_text") {
+                    self.reasoning_snapshot(
+                        (
+                            required_index(data, "output_index")?,
+                            required_index(data, "summary_index")?,
+                        ),
+                        required_str(part, "text")?,
+                        &mut frames,
+                    )?;
+                }
+            }
             Some("response.output_text.delta" | "response.refusal.delta") => {
                 let key = content_key(data)?;
                 let value = required_str(data, "delta")?;
@@ -135,15 +182,21 @@ impl ChatEncoder {
                 let tool = self.tools.get_mut(&index).ok_or_else(invalid_response)?;
                 tool.arguments.push_str(delta);
                 let tool_index = tool.index;
-                frames.push(self.delta(
-                    json!({"tool_calls":[{"index":tool_index,"function":{"arguments":delta}}]}),
-                ));
+                frames.push(self.tool_delta(tool_index, None, None, delta));
             }
             Some("response.function_call_arguments.done") => {
                 let index = required_index(data, "output_index")?;
-                self.arguments_snapshot(index, required_str(data, "arguments")?, &mut frames)?;
+                if let Some(arguments) = data.get("arguments") {
+                    self.arguments_snapshot(
+                        index,
+                        arguments.as_str().ok_or_else(invalid_response)?,
+                        &mut frames,
+                    )?;
+                } else if !self.tools.contains_key(&index) {
+                    return Err(invalid_response());
+                }
             }
-            Some("response.completed" | "response.incomplete") => {
+            Some("response.completed" | "response.done" | "response.incomplete") => {
                 let response = data
                     .get("response")
                     .filter(|value| value.is_object())
@@ -168,12 +221,16 @@ impl ChatEncoder {
                             &mut terminal_frames,
                         )?;
                     }
-                } else if self.text.is_empty() && self.refusal.is_empty() && self.tools.is_empty() {
+                } else if self.text.is_empty()
+                    && self.refusal.is_empty()
+                    && self.tools.is_empty()
+                    && self.reasoning.is_empty()
+                {
                     return Err(invalid_response());
                 }
-                self.usage = response
-                    .get("usage")
-                    .filter(|value| !value.is_null())
+                self.usage = self
+                    .usage_tracker
+                    .selected(data)
                     .map(chat_usage)
                     .transpose()?;
                 self.finish_reason = Some(
@@ -184,12 +241,14 @@ impl ChatEncoder {
                             .pointer("/incomplete_details/reason")
                             .and_then(Value::as_str)
                         {
-                            Some("max_output_tokens") => "length",
+                            Some("max_output_tokens" | "max_tokens") => "length",
                             Some("content_filter") => "content_filter",
                             _ => return Err(invalid_response()),
                         }
                     } else if self.tools.is_empty() {
                         "stop"
+                    } else if self.legacy_functions {
+                        "function_call"
                     } else {
                         "tool_calls"
                     },
@@ -248,6 +307,24 @@ impl ChatEncoder {
         Ok(())
     }
 
+    fn reasoning_snapshot(
+        &mut self,
+        key: (u64, u64),
+        value: &str,
+        frames: &mut Vec<Bytes>,
+    ) -> Result<(), ProtocolErrorBody> {
+        let accumulated = self.reasoning.entry(key).or_default();
+        let suffix = value
+            .strip_prefix(accumulated.as_str())
+            .ok_or_else(invalid_response)?
+            .to_owned();
+        value.clone_into(accumulated);
+        if !suffix.is_empty() {
+            frames.push(self.delta(json!({"reasoning_content":suffix})));
+        }
+        Ok(())
+    }
+
     fn part(
         &mut self,
         key: (u64, u64),
@@ -271,6 +348,27 @@ impl ChatEncoder {
         item: &Value,
         frames: &mut Vec<Bytes>,
     ) -> Result<(), ProtocolErrorBody> {
+        // 终态 output 可能只包含部分条目；先按稳定身份关联原始 output_index。
+        let item_id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        let call_id = item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        let known_call = call_id.and_then(|id| {
+            self.tools
+                .iter()
+                .find_map(|(index, tool)| (tool.id == id).then_some(*index))
+        });
+        let index = item_id
+            .and_then(|id| self.item_ids.get(id).copied())
+            .or(known_call)
+            .unwrap_or(index);
+        if let Some(id) = item_id {
+            self.item_ids.insert(id.to_owned(), index);
+        }
         match item.get("type").and_then(Value::as_str) {
             Some("message") => {
                 if required_str(item, "role")? != "assistant" {
@@ -294,28 +392,70 @@ impl ChatEncoder {
                 }
             }
             Some("function_call") => {
-                let id = required_str(item, "call_id")?;
-                let name = required_str(item, "name")?;
+                let existing = self.tools.get(&index);
+                let id = item
+                    .get("call_id")
+                    .map(|value| value.as_str().ok_or_else(invalid_response))
+                    .transpose()?
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| existing.map(|tool| tool.id.as_str()))
+                    .ok_or_else(invalid_response)?
+                    .to_owned();
+                let name = item
+                    .get("name")
+                    .map(|value| value.as_str().ok_or_else(invalid_response))
+                    .transpose()?
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| existing.map(|tool| tool.name.as_str()))
+                    .ok_or_else(invalid_response)?
+                    .to_owned();
+                if id.is_empty() || name.is_empty() {
+                    return Err(invalid_response());
+                }
                 let next_index = self.tools.len();
                 if let Some(tool) = self.tools.get(&index) {
                     if tool.id != id || tool.name != name {
                         return Err(invalid_response());
                     }
                 } else {
+                    if self.legacy_functions && next_index > 0 {
+                        return Err(invalid_response());
+                    }
                     self.tools.insert(
                         index,
                         Tool {
                             index: next_index,
-                            id: id.to_owned(),
-                            name: name.to_owned(),
+                            id: id.clone(),
+                            name: name.clone(),
                             arguments: String::new(),
                         },
                     );
-                    frames.push(self.delta(json!({"tool_calls":[{"index":next_index,"id":id,"type":"function","function":{"name":name,"arguments":""}}]})));
+                    frames.push(self.tool_delta(next_index, Some(&id), Some(&name), ""));
                 }
-                self.arguments_snapshot(index, required_str(item, "arguments")?, frames)?;
+                if let Some(arguments) = item.get("arguments") {
+                    self.arguments_snapshot(
+                        index,
+                        arguments.as_str().ok_or_else(invalid_response)?,
+                        frames,
+                    )?;
+                }
             }
-            Some("reasoning") => {}
+            Some("reasoning") => {
+                if let Some(summary) = item.get("summary").and_then(Value::as_array) {
+                    for (summary_index, part) in summary.iter().enumerate() {
+                        if part.get("type").and_then(Value::as_str) == Some("summary_text") {
+                            self.reasoning_snapshot(
+                                (
+                                    index,
+                                    u64::try_from(summary_index).map_err(|_| invalid_response())?,
+                                ),
+                                required_str(part, "text")?,
+                                frames,
+                            )?;
+                        }
+                    }
+                }
+            }
             _ => return Err(invalid_response()),
         }
         Ok(())
@@ -328,6 +468,10 @@ impl ChatEncoder {
         frames: &mut Vec<Bytes>,
     ) -> Result<(), ProtocolErrorBody> {
         let tool = self.tools.get_mut(&index).ok_or_else(invalid_response)?;
+        // 不完整的 done/terminal 快照不能清空已经交付的参数。
+        if value.is_empty() {
+            return Ok(());
+        }
         let suffix = value
             .strip_prefix(&tool.arguments)
             .ok_or_else(invalid_response)?
@@ -335,11 +479,31 @@ impl ChatEncoder {
         value.clone_into(&mut tool.arguments);
         let tool_index = tool.index;
         if !suffix.is_empty() {
-            frames.push(self.delta(
-                json!({"tool_calls":[{"index":tool_index,"function":{"arguments":suffix}}]}),
-            ));
+            frames.push(self.tool_delta(tool_index, None, None, &suffix));
         }
         Ok(())
+    }
+
+    fn tool_delta(
+        &self,
+        index: usize,
+        id: Option<&str>,
+        name: Option<&str>,
+        arguments: &str,
+    ) -> Bytes {
+        let mut function = json!({"arguments": arguments});
+        if let Some(name) = name {
+            function["name"] = json!(name);
+        }
+        if self.legacy_functions {
+            return self.delta(json!({"function_call": function}));
+        }
+        let mut call = json!({"index": index, "function": function});
+        if let Some(id) = id {
+            call["id"] = json!(id);
+            call["type"] = json!("function");
+        }
+        self.delta(json!({"tool_calls": [call]}))
     }
 
     fn envelope(&self, object: &str, choices: Value) -> Value {
@@ -367,7 +531,7 @@ impl ChatEncoder {
             finish["usage"] = Value::Null;
         }
         frames.push(frame(&finish));
-        if self.include_usage {
+        if self.include_usage && self.usage.is_some() {
             let mut value = self.envelope("chat.completion.chunk", json!([]));
             value["usage"] = self.usage.clone().unwrap_or(Value::Null);
             frames.push(frame(&value));
@@ -384,10 +548,19 @@ impl ChatEncoder {
         if !self.refusal.is_empty() {
             message["refusal"] = Value::String(self.refusal.values().cloned().collect());
         }
+        if !self.reasoning.is_empty() {
+            message["reasoning_content"] =
+                Value::String(self.reasoning.values().cloned().collect());
+        }
         if !self.tools.is_empty() {
             let mut tools: Vec<_> = self.tools.values().collect();
             tools.sort_by_key(|tool| tool.index);
-            message["tool_calls"] = Value::Array(tools.iter().map(|tool| json!({"id":tool.id,"type":"function","function":{"name":tool.name,"arguments":tool.arguments}})).collect());
+            if self.legacy_functions {
+                message["function_call"] =
+                    json!({"name":tools[0].name,"arguments":tools[0].arguments});
+            } else {
+                message["tool_calls"] = Value::Array(tools.iter().map(|tool| json!({"id":tool.id,"type":"function","function":{"name":tool.name,"arguments":tool.arguments}})).collect());
+            }
         }
         let mut response = self.envelope(
             "chat.completion",
@@ -401,8 +574,16 @@ impl ChatEncoder {
 }
 
 fn chat_usage(usage: &Value) -> Result<Value, ProtocolErrorBody> {
-    let input = required_index(usage, "input_tokens")?;
-    let output = required_index(usage, "output_tokens")?;
+    let input = usage
+        .get("input_tokens")
+        .or_else(|| usage.get("prompt_tokens"))
+        .and_then(Value::as_u64)
+        .ok_or_else(invalid_response)?;
+    let output = usage
+        .get("output_tokens")
+        .or_else(|| usage.get("completion_tokens"))
+        .and_then(Value::as_u64)
+        .ok_or_else(invalid_response)?;
     let total = input.checked_add(output).ok_or_else(invalid_response)?;
     if let Some(supplied) = usage.get("total_tokens")
         && supplied.as_u64() != Some(total)
@@ -434,18 +615,51 @@ fn chat_usage(usage: &Value) -> Result<Value, ProtocolErrorBody> {
             ][..],
         ),
     ] {
-        if let Some(details) = usage.get(source).filter(|value| !value.is_null()) {
-            let details = details.as_object().ok_or_else(invalid_response)?;
-            let mut mapped = serde_json::Map::new();
-            for field in fields {
-                if let Some(count) = details.get(*field).filter(|value| !value.is_null()) {
-                    let count = count.as_u64().ok_or_else(invalid_response)?;
-                    mapped.insert((*field).to_owned(), json!(count));
-                }
+        let details = usage
+            .get(source)
+            .filter(|value| !value.is_null())
+            .map(|value| value.as_object().ok_or_else(invalid_response))
+            .transpose()?;
+        let aliases = usage
+            .get(target)
+            .filter(|value| !value.is_null())
+            .map(|value| value.as_object().ok_or_else(invalid_response))
+            .transpose()?;
+        let mut mapped = serde_json::Map::new();
+        for field in fields {
+            if let Some(count) = details
+                .and_then(|details| details.get(*field))
+                .filter(|value| !value.is_null())
+                .or_else(|| {
+                    aliases
+                        .and_then(|details| details.get(*field))
+                        .filter(|value| !value.is_null())
+                })
+            {
+                let count = count.as_u64().ok_or_else(invalid_response)?;
+                mapped.insert((*field).to_owned(), json!(count));
             }
-            if !mapped.is_empty() {
-                value[target] = Value::Object(mapped);
+        }
+        if !mapped.is_empty() {
+            value[target] = Value::Object(mapped);
+        }
+    }
+    for (source, target) in [
+        ("cached_tokens", "prompt_tokens_details"),
+        ("cache_write_tokens", "prompt_tokens_details"),
+        ("reasoning_tokens", "completion_tokens_details"),
+    ] {
+        if value
+            .get(target)
+            .and_then(|details| details.get(source))
+            .is_none()
+            && let Some(count) = usage.get(source)
+        {
+            let count = count.as_u64().ok_or_else(invalid_response)?;
+            if value.get(target).is_none() {
+                value[target] = json!({});
             }
+            value[target][source] = json!(count);
         }
     }
     Ok(value)

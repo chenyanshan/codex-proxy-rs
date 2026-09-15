@@ -11,6 +11,7 @@ use super::super::responses::{
 pub(super) struct DecodedChatRequest {
     pub(super) responses: DecodedResponsesRequest,
     pub(super) include_usage: bool,
+    pub(super) legacy_functions: bool,
 }
 
 pub(super) fn decode_request_with_headers(
@@ -23,6 +24,44 @@ pub(super) fn decode_request_with_headers(
     let Value::Object(mut chat) = value else {
         return Err(RequestDecodeError::ExpectedObject);
     };
+    if chat.get("input").is_some_and(|value| !value.is_null()) {
+        if chat.get("messages").is_some_and(|value| !value.is_null()) {
+            return Err(invalid("messages"));
+        }
+        chat.remove("messages");
+        let stream = take_bool(&mut chat, "stream")?.unwrap_or(false);
+        chat.insert("stream".into(), stream.into());
+        let include_usage = stream_options(chat.remove("stream_options"), stream)?;
+        let mut chat_options = Map::new();
+        for field in [
+            "n",
+            "logprobs",
+            "top_logprobs",
+            "stop",
+            "frequency_penalty",
+            "presence_penalty",
+            "logit_bias",
+            "modalities",
+            "audio",
+            "prediction",
+            "seed",
+        ] {
+            if let Some(value) = chat.remove(field) {
+                chat_options.insert(field.into(), value);
+            }
+        }
+        validate_remaining(chat_options)?;
+        let responses = decode_request_object(
+            chat,
+            &OpenAiRequestHeaders::from_headers(headers),
+            RequestDecodeSource::Http,
+        )?;
+        return Ok(DecodedChatRequest {
+            responses,
+            include_usage,
+            legacy_functions: false,
+        });
+    }
     let mut responses = Map::new();
     responses.insert("model".into(), take_required(&mut chat, "model")?);
     let stream = take_bool(&mut chat, "stream")?.unwrap_or(false);
@@ -33,16 +72,67 @@ pub(super) fn decode_request_with_headers(
         "input".into(),
         messages(take_required(&mut chat, "messages")?)?,
     );
-    if let Some(tools) = take_optional(&mut chat, "tools") {
-        responses.insert("tools".into(), function_tools(tools)?);
+    let modern_tools = take_optional(&mut chat, "tools");
+    let functions = take_optional(&mut chat, "functions");
+    let legacy_choice = take_optional(&mut chat, "function_call");
+    let legacy_functions = modern_tools
+        .as_ref()
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty)
+        && (functions.is_some() || legacy_choice.is_some());
+    let mut tools = match modern_tools {
+        Some(tools) => function_tools(tools, false)?,
+        None => Vec::new(),
+    };
+    if let Some(functions) = functions {
+        tools.extend(function_tools(functions, true)?);
     }
-    if let Some(choice) = take_optional(&mut chat, "tool_choice") {
-        responses.insert(
-            "tool_choice".into(),
-            tool_choice(choice, responses.get("tools"))?,
-        );
+    let mut merged = Vec::new();
+    for tool in tools {
+        if let Some(previous) = merged
+            .iter()
+            .find(|previous: &&Value| previous["name"] == tool["name"])
+        {
+            if previous != &tool {
+                return Err(invalid("functions"));
+            }
+        } else {
+            merged.push(tool);
+        }
     }
-    if let Some(parallel) = take_bool(&mut chat, "parallel_tool_calls")? {
+    if !merged.is_empty() {
+        responses.insert("tools".into(), merged.into());
+    }
+    let modern_choice = take_optional(&mut chat, "tool_choice")
+        .map(|choice| tool_choice(choice, responses.get("tools")))
+        .transpose()?;
+    let legacy_choice = legacy_choice
+        .map(|choice| {
+            if matches!(choice.as_str(), Some("auto" | "none")) {
+                return Ok(choice);
+            }
+            let mut choice = object(choice, "function_call")?;
+            let name = take_string(&mut choice, "name", "function_call", false)?;
+            Ok(json!({"type":"function","function":{"name":name}}))
+        })
+        .transpose()?
+        .map(|choice| tool_choice(choice, responses.get("tools")))
+        .transpose()?;
+    if modern_choice.is_some() && legacy_choice.is_some() && modern_choice != legacy_choice {
+        return Err(invalid("function_call"));
+    }
+    if let Some(choice) = modern_choice.or(legacy_choice) {
+        responses.insert("tool_choice".into(), choice);
+    }
+    let parallel = take_bool(&mut chat, "parallel_tool_calls")?;
+    if legacy_functions && parallel == Some(true) {
+        return Err(unsupported("parallel_tool_calls"));
+    }
+    if let Some(parallel) = if legacy_functions {
+        Some(false)
+    } else {
+        parallel
+    } {
         responses.insert("parallel_tool_calls".into(), parallel.into());
     }
     if let Some(format) = take_optional(&mut chat, "response_format") {
@@ -63,6 +153,64 @@ pub(super) fn decode_request_with_headers(
         }
         responses.insert("top_p".into(), top_p);
     }
+    if let Some(value) = take_optional(&mut chat, "temperature") {
+        if !value
+            .as_f64()
+            .is_some_and(|value| (0.0..=2.0).contains(&value))
+        {
+            return Err(invalid("temperature"));
+        }
+        responses.insert("temperature".into(), value);
+    }
+    for field in ["max_tokens", "max_completion_tokens"] {
+        if let Some(value) = take_optional(&mut chat, field) {
+            if !value.as_u64().is_some_and(|value| value > 0) {
+                return Err(invalid(field));
+            }
+            responses.insert("max_output_tokens".into(), value);
+        }
+    }
+    let mut reasoning = Map::new();
+    if let Some(value) = take_optional(&mut chat, "reasoning") {
+        let mut value = object(value, "reasoning")?;
+        for field in ["effort", "summary"] {
+            if let Some(value) = take_optional(&mut value, field) {
+                let valid = match field {
+                    "effort" => valid_reasoning_effort(&value),
+                    _ => matches!(value.as_str(), Some("auto" | "concise" | "detailed")),
+                };
+                if !valid {
+                    return Err(invalid(&format!("reasoning.{field}")));
+                }
+                reasoning.insert(field.into(), value);
+            }
+        }
+    }
+    if let Some(effort) = take_optional(&mut chat, "reasoning_effort") {
+        if !valid_reasoning_effort(&effort) {
+            return Err(invalid("reasoning_effort"));
+        }
+        reasoning.insert("effort".into(), effort);
+    }
+    if !reasoning.is_empty() {
+        responses.insert("reasoning".into(), reasoning.into());
+    }
+    for field in [
+        "instructions",
+        "service_tier",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+    ] {
+        if let Some(value) = take_optional(&mut chat, field) {
+            if !value.is_string() {
+                return Err(invalid(field));
+            }
+            responses.insert(field.into(), value);
+        }
+    }
+    for field in ["user", "metadata", "safety_identifier"] {
+        validate_metadata(&mut chat, field)?;
+    }
     validate_remaining(chat)?;
     let responses = decode_request_object(
         responses,
@@ -72,7 +220,15 @@ pub(super) fn decode_request_with_headers(
     Ok(DecodedChatRequest {
         responses,
         include_usage,
+        legacy_functions,
     })
+}
+
+fn valid_reasoning_effort(value: &Value) -> bool {
+    matches!(
+        value.as_str(),
+        Some("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max")
+    )
 }
 
 fn stream_options(value: Option<Value>, stream: bool) -> Result<bool, RequestDecodeError> {
@@ -86,15 +242,11 @@ fn stream_options(value: Option<Value>, stream: bool) -> Result<bool, RequestDec
         "stream_options.include_usage",
     )?
     .unwrap_or(false);
-    if take_bool_at(
+    take_bool_at(
         &mut options,
         "include_obfuscation",
         "stream_options.include_obfuscation",
-    )? == Some(true)
-    {
-        return Err(unsupported("stream_options.include_obfuscation"));
-    }
-    reject_remaining(&options, "stream_options")?;
+    )?;
     if !stream {
         return Err(invalid("stream_options"));
     }
@@ -114,17 +266,17 @@ fn validate_remaining(chat: Map<String, Value>) -> Result<(), RequestDecodeError
             }
             "modalities" => value.is_null() || value == json!(["text"]),
             "service_tier" => value.is_null() || value == "auto",
+            "stop" => value.is_null() || value.as_array().is_some_and(Vec::is_empty),
+            "top_logprobs" => value.is_null() || value.as_u64() == Some(0),
             "temperature"
             | "max_tokens"
             | "max_completion_tokens"
             | "reasoning_effort"
-            | "stop"
             | "seed"
             | "audio"
             | "prediction"
             | "functions"
             | "function_call"
-            | "top_logprobs"
             | "web_search_options"
             | "safety_identifier"
             | "prompt_cache_key"
@@ -133,10 +285,26 @@ fn validate_remaining(chat: Map<String, Value>) -> Result<(), RequestDecodeError
             | "user"
             | "verbosity"
             | "moderation" => value.is_null(),
-            _ => return Err(RequestDecodeError::UnknownField { field }),
+            _ => true,
         };
         if !neutral {
             return Err(unsupported(&field));
+        }
+    }
+    Ok(())
+}
+
+fn validate_metadata(chat: &mut Map<String, Value>, field: &str) -> Result<(), RequestDecodeError> {
+    if let Some(value) = take_optional(chat, field) {
+        let valid = if field == "metadata" {
+            value
+                .as_object()
+                .is_some_and(|values| values.values().all(Value::is_string))
+        } else {
+            value.is_string()
+        };
+        if !valid {
+            return Err(invalid(field));
         }
     }
     Ok(())
@@ -152,17 +320,56 @@ fn messages(value: Value) -> Result<Value, RequestDecodeError> {
         });
     }
     let mut input = Vec::new();
+    // 旧函数没有调用 ID；以历史位置生成身份，并只配对尚未返回的同名调用。
+    let mut legacy_pending: Vec<(String, String)> = Vec::new();
+    let mut used_ids = std::collections::HashSet::new();
+    for message in &messages {
+        if let Some(id) = message.get("tool_call_id").and_then(Value::as_str) {
+            used_ids.insert(id.to_owned());
+        }
+        if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
+            for call in calls {
+                if let Some(id) = call.get("id").and_then(Value::as_str) {
+                    used_ids.insert(id.to_owned());
+                }
+            }
+        }
+    }
     for (index, message) in messages.into_iter().enumerate() {
         let path = format!("messages[{index}]");
         let mut message = object(message, &path)?;
         let role = take_string(&mut message, "role", &path, false)?;
-        for field in ["name", "audio", "function_call", "refusal"] {
-            if take_optional(&mut message, field).is_some() {
-                return Err(unsupported(&format!("{path}.{field}")));
+        let name = take_optional(&mut message, "name");
+        if name.as_ref().is_some_and(|value| !value.is_string()) {
+            return Err(invalid(&format!("{path}.name")));
+        }
+        if take_optional(&mut message, "audio").is_some() {
+            return Err(unsupported(&format!("{path}.audio")));
+        }
+        for (field, allowed_role) in [
+            ("tool_calls", "assistant"),
+            ("tool_call_id", "tool"),
+            ("function_call", "assistant"),
+            ("refusal", "assistant"),
+        ] {
+            if role != allowed_role && message.get(field).is_some_and(|value| !value.is_null()) {
+                return Err(invalid(&format!("{path}.{field}")));
             }
         }
-        if role == "tool" {
-            let call_id = take_string(&mut message, "tool_call_id", &path, false)?;
+        if role == "tool" || role == "function" {
+            let call_id = if role == "tool" {
+                take_string(&mut message, "tool_call_id", &path, false)?
+            } else {
+                let name = name
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| invalid(&format!("{path}.name")))?;
+                let pending = legacy_pending
+                    .iter()
+                    .position(|(pending, _)| pending == &name)
+                    .ok_or_else(|| invalid(&format!("{path}.name")))?;
+                legacy_pending.remove(pending).1
+            };
             let output = content(
                 take_required_at(&mut message, "content", &format!("{path}.content"))?,
                 "tool",
@@ -170,16 +377,77 @@ fn messages(value: Value) -> Result<Value, RequestDecodeError> {
             )?;
             input.push(json!({"type":"function_call_output","call_id":call_id,"output":output}));
         } else if matches!(role.as_str(), "system" | "developer" | "user" | "assistant") {
-            let text = take_optional(&mut message, "content");
+            let text = message.remove("content");
             let tool_calls = take_optional(&mut message, "tool_calls");
-            if role != "assistant" && tool_calls.is_some() {
-                return Err(invalid(&path));
+            let legacy_call = take_optional(&mut message, "function_call");
+            let refusal = take_optional(&mut message, "refusal");
+            let reasoning_content = take_optional(&mut message, "reasoning_content");
+            let reasoning = take_optional(&mut message, "reasoning");
+            for (field, value) in [
+                ("reasoning_content", &reasoning_content),
+                ("reasoning", &reasoning),
+            ] {
+                if value.as_ref().is_some_and(|value| !value.is_string()) {
+                    return Err(invalid(&format!("{path}.{field}")));
+                }
             }
-            if text.is_none() && tool_calls.is_none() {
+            let reasoning = reasoning_content.or(reasoning);
+            if role == "assistant"
+                && let Some(reasoning) = &reasoning
+            {
+                // 公开思考文本作为客户端历史正文保留，不伪造上游 reasoning 身份或加密状态。
+                input.push(
+                    json!({"role":"assistant","content":[{"type":"input_text","text":reasoning}]}),
+                );
+            }
+            if refusal.as_ref().is_some_and(|value| !value.is_string()) {
+                return Err(invalid(&format!("{path}.refusal")));
+            }
+            if tool_calls.is_some() && legacy_call.is_some() {
+                return Err(invalid(&format!("{path}.function_call")));
+            }
+            if text.is_none()
+                && tool_calls.is_none()
+                && legacy_call.is_none()
+                && refusal.is_none()
+                && !(role == "assistant" && reasoning.is_some())
+            {
                 return Err(invalid(&format!("{path}.content")));
             }
-            if let Some(text) = text {
+            let text = text.filter(|value| {
+                !value.is_null() || (tool_calls.is_none() && legacy_call.is_none())
+            });
+            let has_refusal_parts = role == "assistant"
+                && text
+                    .as_ref()
+                    .and_then(Value::as_array)
+                    .is_some_and(|parts| {
+                        parts
+                            .iter()
+                            .any(|part| part.get("type").and_then(Value::as_str) == Some("refusal"))
+                    });
+            if refusal.is_some() || has_refusal_parts {
+                let mut parts = assistant_output_content(text, &format!("{path}.content"))?;
+                if let Some(refusal) = refusal {
+                    parts.push(json!({"type":"refusal","refusal":refusal}));
+                }
+                input.push(json!({"type":"message","id":format!("msg_chat_{index}"),"role":"assistant","status":"completed","content":parts}));
+            } else if let Some(text) = text {
                 input.push(json!({"role":role,"content":content(text, &role, &format!("{path}.content"))?}));
+            }
+            if let Some(call) = legacy_call {
+                let function_path = format!("{path}.function_call");
+                let mut function = object(call, &function_path)?;
+                let name = take_string(&mut function, "name", &function_path, false)?;
+                let arguments = take_string(&mut function, "arguments", &function_path, true)?;
+                let mut id = format!("call_chat_legacy_{index}");
+                while !used_ids.insert(id.clone()) {
+                    id.push('_');
+                }
+                legacy_pending.push((name.clone(), id.clone()));
+                input.push(
+                    json!({"type":"function_call","call_id":id,"name":name,"arguments":arguments}),
+                );
             }
             if let Some(tool_calls) = tool_calls {
                 let Value::Array(tool_calls) = tool_calls else {
@@ -199,20 +467,41 @@ fn messages(value: Value) -> Result<Value, RequestDecodeError> {
                     )?;
                     let name = take_string(&mut function, "name", &function_path, false)?;
                     let arguments = take_string(&mut function, "arguments", &function_path, true)?;
-                    reject_remaining(&function, &function_path)?;
-                    reject_remaining(&call, &call_path)?;
                     input.push(json!({"type":"function_call","call_id":id,"name":name,"arguments":arguments}));
                 }
             }
         } else {
             return Err(unsupported(&format!("{path}.role")));
         }
-        reject_remaining(&message, &path)?;
+        // 消息对象可携带客户端扩展；只投影上面按角色提取的协议字段，不递归过滤正文或工具参数。
     }
     Ok(input.into())
 }
 
+fn assistant_output_content(
+    text: Option<Value>,
+    path: &str,
+) -> Result<Vec<Value>, RequestDecodeError> {
+    match text {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::String(text)) => Ok(vec![json!({"type":"output_text","text":text,"annotations":[]})]),
+        Some(Value::Array(parts)) => parts.into_iter().enumerate().map(|(index, part)| {
+            let path = format!("{path}[{index}]");
+            let mut part = object(part, &path)?;
+            match take_string(&mut part, "type", &path, false)?.as_str() {
+                "text" => Ok(json!({"type":"output_text","text":take_string(&mut part,"text",&path,true)?,"annotations":[]})),
+                "refusal" => Ok(json!({"type":"refusal","refusal":take_string(&mut part,"refusal",&path,true)?})),
+                _ => Err(unsupported(&format!("{path}.type"))),
+            }
+        }).collect(),
+        _ => Err(invalid(path)),
+    }
+}
+
 fn content(value: Value, role: &str, path: &str) -> Result<Value, RequestDecodeError> {
+    if value.is_null() {
+        return Ok(Value::String(String::new()));
+    }
     if value.is_string() {
         return Ok(value);
     }
@@ -242,6 +531,9 @@ fn content(value: Value, role: &str, path: &str) -> Result<Value, RequestDecodeE
                         || parsed.scheme() == "data"
                             && url.starts_with("data:image/")
                             && url.contains(";base64,")
+                            && url
+                                .split_once(";base64,")
+                                .is_some_and(|(_, data)| !data.trim().is_empty())
                 }) {
                     return Err(invalid(&format!("{image_path}.url")));
                 }
@@ -252,33 +544,55 @@ fn content(value: Value, role: &str, path: &str) -> Result<Value, RequestDecodeE
                     }
                     converted["detail"] = detail;
                 }
-                reject_remaining(&image, &image_path)?;
+                converted
+            }
+            "file" if role == "user" => {
+                let file_path = format!("{path}.file");
+                let mut file =
+                    object(take_required_at(&mut part, "file", &file_path)?, &file_path)?;
+                let mut converted = json!({"type":"input_file"});
+                for field in ["file_data", "file_id", "filename"] {
+                    if let Some(value) = take_optional(&mut file, field) {
+                        if !value.as_str().is_some_and(|value| !value.trim().is_empty()) {
+                            return Err(invalid(&format!("{file_path}.{field}")));
+                        }
+                        converted[field] = value;
+                    }
+                }
+                if converted.get("file_data").is_none() && converted.get("file_id").is_none() {
+                    return Err(invalid(&file_path));
+                }
                 converted
             }
             _ => return Err(unsupported(&format!("{path}.type"))),
         };
-        reject_remaining(&part, &path)?;
         result.push(converted);
     }
     Ok(result.into())
 }
 
-fn function_tools(value: Value) -> Result<Value, RequestDecodeError> {
+fn function_tools(value: Value, legacy: bool) -> Result<Vec<Value>, RequestDecodeError> {
+    let root = if legacy { "functions" } else { "tools" };
     let Value::Array(tools) = value else {
-        return Err(invalid("tools"));
+        return Err(invalid(root));
     };
     let mut result: Vec<Value> = Vec::with_capacity(tools.len());
     for (index, tool) in tools.into_iter().enumerate() {
-        let path = format!("tools[{index}]");
+        let path = format!("{root}[{index}]");
         let mut tool = object(tool, &path)?;
-        if take_string(&mut tool, "type", &path, false)? != "function" {
-            return Err(unsupported(&format!("{path}.type")));
-        }
-        let function_path = format!("{path}.function");
-        let mut function = object(
-            take_required_at(&mut tool, "function", &function_path)?,
-            &function_path,
-        )?;
+        let (function_path, mut function) = if legacy {
+            (path, tool)
+        } else {
+            if take_string(&mut tool, "type", &path, false)? != "function" {
+                return Err(unsupported(&format!("{path}.type")));
+            }
+            let function_path = format!("{path}.function");
+            let function = object(
+                take_required_at(&mut tool, "function", &function_path)?,
+                &function_path,
+            )?;
+            (function_path, function)
+        };
         let name = take_string(&mut function, "name", &function_path, false)?;
         // Chat 函数工具默认非 strict，不能让 Responses 的默认规范化收紧调用合同。
         let mut converted = Map::from_iter([
@@ -299,11 +613,9 @@ fn function_tools(value: Value) -> Result<Value, RequestDecodeError> {
                 converted.insert(field.into(), value);
             }
         }
-        reject_remaining(&function, &function_path)?;
-        reject_remaining(&tool, &path)?;
         result.push(converted.into());
     }
-    Ok(result.into())
+    Ok(result)
 }
 
 fn tool_choice(value: Value, tools: Option<&Value>) -> Result<Value, RequestDecodeError> {
@@ -332,8 +644,6 @@ fn tool_choice(value: Value, tools: Option<&Value>) -> Result<Value, RequestDeco
     {
         return Err(invalid("tool_choice.function.name"));
     }
-    reject_remaining(&function, "tool_choice.function")?;
-    reject_remaining(&choice, "tool_choice")?;
     Ok(json!({"type":"function","name":name}))
 }
 
@@ -363,12 +673,10 @@ fn response_format(value: Value) -> Result<Value, RequestDecodeError> {
             {
                 converted["strict"] = strict.into();
             }
-            reject_remaining(&schema, path)?;
             converted
         }
         _ => return Err(unsupported("response_format.type")),
     };
-    reject_remaining(&format, "response_format")?;
     Ok(converted)
 }
 
@@ -432,15 +740,6 @@ fn take_string(
         Value::String(value) if allow_empty || !value.trim().is_empty() => Ok(value),
         _ => Err(invalid(&format!("{path}.{field}"))),
     }
-}
-
-fn reject_remaining(object: &Map<String, Value>, path: &str) -> Result<(), RequestDecodeError> {
-    if let Some(field) = object.keys().next() {
-        return Err(RequestDecodeError::UnknownField {
-            field: format!("{path}.{field}"),
-        });
-    }
-    Ok(())
 }
 
 fn invalid(field: &str) -> RequestDecodeError {

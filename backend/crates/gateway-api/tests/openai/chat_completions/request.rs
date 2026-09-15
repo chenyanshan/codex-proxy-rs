@@ -115,6 +115,153 @@ async fn converted(request: Value) -> Value {
 }
 
 #[tokio::test]
+async fn maps_common_controls_and_filters_protocol_extensions() {
+    let schema =
+        json!({"type":"object","properties":{"agent":{"type":"string"}},"custom":{"keep":true}});
+    let body = converted(json!({"model":"model-a","messages":[{"role":"user","name":"caller","agent":"craft","content":[{"type":"text","text":"hi","agent":"local"}]}],
+        "temperature":1.2,"top_p":0.8,"max_tokens":20,"max_completion_tokens":7,"reasoning_effort":"max","service_tier":"priority","instructions":"follow rules",
+        "prompt_cache_key":"cache","prompt_cache_retention":"24h","user":"caller","safety_identifier":"safe","metadata":{"a":"b"},"unknown":{"secret":true},
+        "tools":[{"type":"function","extension":true,"function":{"name":"run","parameters":schema,"strict":true,"agent":"local"}}],
+        "tool_choice":{"type":"function","function":{"name":"run","agent":"local"},"extension":1},
+        "stream":true,"stream_options":{"include_usage":true,"include_obfuscation":true,"extension":1},"stop":[],"top_logprobs":0
+    })).await;
+    assert_eq!(body["max_output_tokens"], 7);
+    assert_eq!(body["temperature"], 1.2);
+    assert_eq!(body["reasoning"], json!({"effort":"max"}));
+    assert_eq!(body["service_tier"], "priority");
+    assert_eq!(body["instructions"], "follow rules");
+    assert_eq!(body["prompt_cache_key"], "cache");
+    assert_eq!(body["prompt_cache_retention"], "24h");
+    assert_eq!(
+        body["tools"][0],
+        json!({"type":"function","name":"run","parameters":schema,"strict":true})
+    );
+    assert_eq!(
+        body["input"],
+        json!([{"role":"user","content":[{"type":"input_text","text":"hi"}]}])
+    );
+    for field in [
+        "user",
+        "metadata",
+        "safety_identifier",
+        "unknown",
+        "stream_options",
+        "stop",
+        "top_logprobs",
+    ] {
+        assert!(body.get(field).is_none(), "{field}");
+    }
+}
+
+#[tokio::test]
+async fn preserves_file_inputs_refusals_and_public_reasoning_history() {
+    let body = converted(json!({"model":"model-a","messages":[
+        {"role":"user","content":[{"type":"file","file":{"file_data":"data:application/pdf;base64,AA==","filename":"a.pdf","agent":"local"}},{"type":"file","file":{"file_id":"file-1"}}]},
+        {"role":"assistant","content":[{"type":"text","text":"first"},{"type":"refusal","refusal":"cannot"},{"type":"text","text":"last"}]},
+        {"role":"assistant","refusal":"no"},
+        {"role":"assistant","reasoning_content":"public summary","reasoning":"fallback","content":"answer"},
+        {"role":"user","content":null}
+    ]})).await;
+    assert_eq!(
+        body["input"][0]["content"],
+        json!([{"type":"input_file","file_data":"data:application/pdf;base64,AA==","filename":"a.pdf"},{"type":"input_file","file_id":"file-1"}])
+    );
+    assert_eq!(
+        body["input"][1],
+        json!({"type":"message","id":"msg_chat_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"first","annotations":[]},{"type":"refusal","refusal":"cannot"},{"type":"output_text","text":"last","annotations":[]}]})
+    );
+    assert_eq!(
+        body["input"][2]["content"],
+        json!([{"type":"refusal","refusal":"no"}])
+    );
+    assert_eq!(
+        body["input"][3],
+        json!({"role":"assistant","content":[{"type":"input_text","text":"public summary"}]})
+    );
+    assert_eq!(body["input"][4]["content"], "answer");
+    assert_eq!(body["input"][5]["content"], "");
+}
+
+#[tokio::test]
+async fn pairs_repeated_legacy_calls_without_rewriting_business_data() {
+    let body = converted(json!({"model":"model-a","functions":[{"name":"run","parameters":{}}],"function_call":{"name":"run"},"messages":[
+        {"role":"assistant","content":"before","function_call":{"name":"run","arguments":""}},
+        {"role":"function","name":"run","content":null},
+        {"role":"assistant","function_call":{"name":"run","arguments":"{unfinished"}},
+        {"role":"function","name":"run","content":"result"}
+    ]})).await;
+    assert_eq!(body["parallel_tool_calls"], false);
+    assert_eq!(body["tool_choice"], json!({"type":"function","name":"run"}));
+    assert_eq!(
+        body["tools"],
+        json!([{"type":"function","name":"run","parameters":{},"strict":false}])
+    );
+    let input = body["input"].as_array().expect("input");
+    assert_eq!(input[0]["content"], "before");
+    assert_eq!(input[1]["arguments"], "");
+    assert_eq!(input[1]["call_id"], input[2]["call_id"]);
+    assert_eq!(input[2]["output"], "");
+    assert_eq!(input[3]["arguments"], "{unfinished");
+    assert_eq!(input[3]["call_id"], input[4]["call_id"]);
+    assert_ne!(input[1]["call_id"], input[3]["call_id"]);
+}
+
+#[tokio::test]
+async fn preserves_responses_shaped_body_through_shared_execution() {
+    let input = json!([{"type":"message","id":"msg_real","role":"assistant","status":"completed","content":[{"type":"refusal","refusal":"no"}]}]);
+    let body=converted(json!({"model":"model-a","input":input,"metadata":{"original":"yes"},"user":"original","future":{"original":[1,2]},"store":false})).await;
+    assert_eq!(body["input"], input);
+    assert_eq!(body["stream"], false);
+    assert_eq!(body["metadata"], json!({"original":"yes"}));
+    assert_eq!(body["future"], json!({"original":[1,2]}));
+}
+
+#[tokio::test]
+async fn rejects_invalid_compatibility_controls_and_ambiguous_histories() {
+    for (extra, param) in [
+        (json!({"temperature":2.1}), "temperature"),
+        (json!({"max_tokens":0}), "max_tokens"),
+        (
+            json!({"max_completion_tokens":1.5}),
+            "max_completion_tokens",
+        ),
+        (json!({"reasoning_effort":42}), "reasoning_effort"),
+        (json!({"metadata":{"x":1}}), "metadata"),
+        (json!({"input":[]}), "messages"),
+        (
+            json!({"functions":[{"name":"run"}],"parallel_tool_calls":true}),
+            "parallel_tool_calls",
+        ),
+        (
+            json!({"messages":[{"role":"function","name":"run","content":"unpaired"}]}),
+            "messages[0].name",
+        ),
+        (
+            json!({"messages":[{"role":"user","content":[{"type":"file","file":{"filename":"a.pdf"}}]}]}),
+            "messages[0].content[0].file",
+        ),
+        (
+            json!({"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,  "}}]}]}),
+            "messages[0].content[0].image_url.url",
+        ),
+    ] {
+        let mut request = json!({"model":"model-a","messages":[{"role":"user","content":"hi"}]});
+        request
+            .as_object_mut()
+            .expect("object")
+            .extend(extra.as_object().expect("object").clone());
+        let (status, body, capture) = send(
+            serde_json::to_vec(&request).expect("JSON"),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["param"], param);
+        assert!(capture.request.lock().expect("capture").is_none());
+    }
+}
+
+#[tokio::test]
 async fn preserves_message_order_images_and_opaque_function_arguments() {
     let body = converted(json!({
         "model":"model-a",
@@ -184,7 +331,7 @@ async fn accepts_optional_nulls_and_neutral_defaults() {
     .await;
     assert_eq!(
         body,
-        json!({"model":"model-a","stream":false,"store":false,"input":[{"role":"user","content":"hi"}]})
+        json!({"model":"model-a","stream":false,"store":false,"input":[{"role":"user","content":"hi"}],"service_tier":"auto"})
     );
 }
 
@@ -213,15 +360,9 @@ async fn preserves_assistant_text_parts_and_clipped_tool_history() {
 #[tokio::test]
 async fn rejects_unsupported_controls_without_starting_execution() {
     for (field, value) in [
-        ("temperature", json!(1)),
-        ("max_tokens", json!(10)),
-        ("max_completion_tokens", json!(10)),
-        ("reasoning_effort", json!("high")),
-        ("service_tier", json!("default")),
         ("n", json!(2)),
         ("store", json!(true)),
         ("logprobs", json!(true)),
-        ("metadata", json!({"private":"secret"})),
         ("stop", json!(["END"])),
     ] {
         let mut request = json!({"model":"model-a","messages":[{"role":"user","content":"hi"}]});
@@ -240,9 +381,8 @@ async fn rejects_unsupported_controls_without_starting_execution() {
 }
 
 #[tokio::test]
-async fn rejects_unknown_fields_and_malformed_nested_values() {
+async fn rejects_malformed_known_fields_and_unsupported_content() {
     for (extra, param) in [
-        (json!({"unknown_future":null}), "unknown_future"),
         (
             json!({"messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"secret"}}]}]}),
             "messages[0].content[0].type",
@@ -269,20 +409,20 @@ async fn rejects_unknown_fields_and_malformed_nested_values() {
             "response_format.json_schema.strict",
         ),
         (
-            json!({"stream":true,"stream_options":{"include_obfuscation":true}}),
+            json!({"stream":true,"stream_options":{"include_obfuscation":"true"}}),
             "stream_options.include_obfuscation",
         ),
         (
-            json!({"messages":[{"role":"assistant","content":null}]}),
+            json!({"messages":[{"role":"assistant","content":12}]}),
             "messages[0].content",
         ),
         (
-            json!({"messages":[{"role":"assistant","refusal":"private refusal"}]}),
+            json!({"messages":[{"role":"assistant","refusal":12}]}),
             "messages[0].refusal",
         ),
         (
-            json!({"messages":[{"role":"assistant","content":[{"type":"refusal","refusal":"private refusal"}]}]}),
-            "messages[0].content[0].type",
+            json!({"messages":[{"role":"assistant","content":[{"type":"refusal","refusal":12}]}]}),
+            "messages[0].content[0].refusal",
         ),
     ] {
         let mut request = json!({"model":"model-a","messages":[{"role":"user","content":"hi"}]});
@@ -299,6 +439,132 @@ async fn rejects_unknown_fields_and_malformed_nested_values() {
         assert_eq!(body["error"]["param"], param);
         assert!(capture.request.lock().expect("capture").is_none());
     }
+}
+
+#[tokio::test]
+async fn ignores_message_extensions_without_filtering_tool_business_data() {
+    let arguments = r#"{"agent":"craft","extensions":{"mode":"exact"}}"#;
+    let schema = json!({"type":"object","properties":{"agent":{"type":"string"}},"extensions":{"agent":"schema-value"}});
+    let request = json!({
+        "model":"model-a",
+        "messages":[
+            {"role":"system","content":"system","client_id":"local"},
+            {"role":"developer","content":"developer","annotations":[1,2]},
+            {"role":"user","content":"question","agent":"craft","extensions":{"nested":true}},
+            {"role":"assistant","content":null,"agent":"craft","tool_calls":[{"id":"call/unchanged","type":"function","function":{"name":"lookup","arguments":arguments}}]},
+            {"role":"tool","tool_call_id":"call/unchanged","content":arguments,"local_state":false}
+        ],
+        "tools":[{"type":"function","function":{"name":"lookup","parameters":schema}}]
+    });
+    let mut baseline = request.clone();
+    for message in baseline["messages"].as_array_mut().expect("messages") {
+        message.as_object_mut().expect("message").retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "role" | "content" | "tool_calls" | "tool_call_id"
+            )
+        });
+    }
+    let body = converted(request).await;
+    assert_eq!(body, converted(baseline).await);
+    assert_eq!(
+        body["input"][3],
+        json!({"type":"function_call","call_id":"call/unchanged","name":"lookup","arguments":arguments})
+    );
+    assert_eq!(
+        body["input"][4],
+        json!({"type":"function_call_output","call_id":"call/unchanged","output":arguments})
+    );
+    assert_eq!(body["tools"][0]["parameters"], schema);
+}
+
+#[tokio::test]
+async fn message_extensions_do_not_relax_known_fields_or_nested_validation() {
+    for (message, param) in [
+        (json!({"role":"invalid","content":"hi"}), "messages[0].role"),
+        (json!({"content":"hi"}), "messages[0].role"),
+        (json!({"role":"user"}), "messages[0].content"),
+        (json!({"role":"user","content":42}), "messages[0].content"),
+        (
+            json!({"role":"assistant","tool_calls":{}}),
+            "messages[0].tool_calls",
+        ),
+        (
+            json!({"role":"tool","content":"result","tool_call_id":42}),
+            "messages[0].tool_call_id",
+        ),
+        (
+            json!({"role":"user","content":"hi","tool_calls":[]}),
+            "messages[0].tool_calls",
+        ),
+        (
+            json!({"role":"assistant","content":"hi","tool_call_id":"call"}),
+            "messages[0].tool_call_id",
+        ),
+        (
+            json!({"role":"tool","content":"result","tool_call_id":"call","tool_calls":[]}),
+            "messages[0].tool_calls",
+        ),
+        (
+            json!({"role":"user","content":"hi","name":12}),
+            "messages[0].name",
+        ),
+        (
+            json!({"role":"assistant","content":"hi","audio":{}}),
+            "messages[0].audio",
+        ),
+        (
+            json!({"role":"assistant","function_call":{}}),
+            "messages[0].function_call.name",
+        ),
+        (
+            json!({"role":"assistant","refusal":false}),
+            "messages[0].refusal",
+        ),
+    ] {
+        let mut message = message;
+        message["agent"] = json!("craft");
+        let request = json!({"model":"model-a","messages":[message]});
+        let (status, body, capture) = send(
+            serde_json::to_vec(&request).expect("JSON"),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["param"], param);
+        assert!(capture.request.lock().expect("capture").is_none());
+    }
+}
+
+#[tokio::test]
+async fn ignores_null_tool_placeholders_without_relaxing_required_tool_id() {
+    let body = converted(json!({"model":"model-a","messages":[
+        {"role":"system","content":"system","tool_calls":null,"tool_call_id":null},
+        {"role":"developer","content":"developer","tool_calls":null,"tool_call_id":null},
+        {"role":"user","content":"question","tool_calls":null,"tool_call_id":null,"agent":"craft"},
+        {"role":"assistant","content":"answer","tool_calls":null,"tool_call_id":null},
+        {"role":"tool","tool_call_id":"call","content":"result","tool_calls":null}
+    ]}))
+    .await;
+    assert_eq!(
+        body["input"],
+        json!([
+            {"role":"system","content":"system"},
+            {"role":"developer","content":"developer"},
+            {"role":"user","content":"question"},
+            {"role":"assistant","content":"answer"},
+            {"type":"function_call_output","call_id":"call","output":"result"}
+        ])
+    );
+    let request = json!({"model":"model-a","messages":[{"role":"tool","content":"result","tool_call_id":null,"agent":"craft"}]});
+    let (status, body, capture) = send(
+        serde_json::to_vec(&request).expect("JSON"),
+        HeaderMap::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["param"], "messages[0].tool_call_id");
+    assert!(capture.request.lock().expect("capture").is_none());
 }
 
 #[tokio::test]

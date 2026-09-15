@@ -224,36 +224,60 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 | 字段 | 支持范围 |
 | --- | --- |
-| `messages` | 按原顺序保留 `system`、`developer`、`user`、`assistant`、`tool`；文本可为字符串或 `text` 内容段数组 |
+| `messages` | 按原顺序保留 `system`、`developer`、`user`、`assistant`、`tool`；文本可为字符串或 `text` 内容段数组；显式 `null` 正文转为空文本，缺失必需正文仍报错 |
 | 用户图片 | `image_url: {url, detail}` 转为图片输入；URL 为 HTTP(S) 或 `data:image/...;base64,...`，`detail` 支持 `auto`、`low`、`high`；网关不下载图片 |
+| 用户文件 | `file: {file_data, file_id, filename}` 转为 `input_file`；至少提供一个非空 `file_data` 或 `file_id`，不下载或重编码文件 |
 | `assistant.tool_calls` | 仅 `function`；保留 `id`、函数名和原始 `arguments` 字符串，允许工具调用消息缺省或 `null` 的 `content` |
 | `tool` 消息 | `tool_call_id` 原样配对；`content` 为字符串或文本段数组，数组不拼接为字符串 |
 | `tools` | 仅函数工具，支持 `name`、`description`、`parameters`、`strict`；JSON Schema 内部字段保持不变，工具默认非 strict |
+| 旧函数接口 | `functions` / `function_call` 转为函数工具和选择；`assistant.function_call` 与后续同名 `role=function` 消息成对转换，每次调用有独立 ID，参数和结果保持原文 |
+| assistant 拒绝历史 | `refusal` 字段及 `text` / `refusal` 混合数组转为完整 Responses 输出消息，保留原顺序 |
+| 公开思考历史 | `reasoning_content`（优先）或 `reasoning` 字符串作为普通 assistant 历史文本保留；不生成 reasoning 引用或加密内容 |
 | `tool_choice` | `none`、`auto`、`required` 或指定函数；`required` 需要非空工具列表，指定函数必须存在于列表 |
 | `parallel_tool_calls` | 布尔值 |
 | `response_format` | `text`、`json_object`、`json_schema`；后者支持 `name`、`schema`、`description`、`strict` |
 | `top_p` / `verbosity` | `top_p` 为 0–1 数值；`verbosity` 为 `low`、`medium`、`high`，具体模型能力仍由上游决定 |
+| 常用生成控制 | `temperature` 为 0–2；正整数 `max_tokens` / `max_completion_tokens` 转为 `max_output_tokens`，后者优先，不改大客户端指定上限 |
+| `reasoning_effort` | `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 转为 `reasoning.effort`；显式 `reasoning` 对象可提供 `effort` 和 `summary`（`auto`、`concise`、`detailed`），顶层 effort 优先，不自动请求摘要；模型限制由 Provider 处理 |
+| 指令与缓存 | `instructions`、`service_tier`、`prompt_cache_key`、`prompt_cache_retention` 字符串映射为同名 Responses 字段 |
 | `n` | 仅 `1`，缺省或 `null` 等价 |
-| `stream_options` | 仅在 `stream=true` 时设置；`include_usage=true` 请求终态用量块，`include_obfuscation=false` 可显式关闭填充；不支持 `true` |
+| `stream_options` | 仅在 `stream=true` 时设置；`include_usage=true` 请求终态用量块；接纳布尔型 `include_obfuscation`，网关不生成填充 |
 
-已知但未实现的非默认语义返回 `400 unsupported_parameter`，包括：`temperature`、
-`max_tokens`、`max_completion_tokens`、`reasoning_effort`、`stop`、`seed`、音频、预测输出、
-旧 `functions` / `function_call`、logprobs、非零 penalties、非空 metadata / logit_bias、
-`store=true`、非默认服务档位、缓存控制、用户/安全标识与网页搜索控制。消息的非 `null` 的 `name`（包括空字符串）
-也不能映射；历史 assistant 的非 `null` 的 `refusal` 字段和 refusal 内容段暂不支持。
-它们不会被静默删除后按成功请求执行。
-可选字段的 `null` 及中性默认值可以省略，例如 `store=false`、`logprobs=false`、penalties 为 `0`、
-`metadata={}`、`logit_bias={}`、`modalities=["text"]`、`service_tier="auto"`。
-`service_tier="default"` 表示指定普通服务等级，与 `auto` 不同，当前不支持。
-未知顶层或嵌套字段返回 `400 unknown_parameter`；结构错误返回对应的 `invalid_value` /
+普通 Chat 请求的 `name`、`user`、`safety_identifier` 接纳字符串，`metadata` 接纳字符串值对象；
+这些客户端元数据验证后过滤，不发送到上游。顶层、消息、内容段和工具等协议对象的未知扩展（例如 `agent`）
+也会过滤；JSON Schema、工具参数字符串和业务正文保持原样，不做递归清理。
+已知但未实现的非默认语义仍返回 `400 unsupported_parameter`：`n>1`、非空 `stop`、`seed`、
+音频、预测输出、`logprobs=true`、非零 penalties、非空 `logit_bias`、`store=true`、网页搜索控制及
+`prompt_cache_options`。可选字段的 `null` 和中性默认值可省略，包含 `stop=[]`、`top_logprobs=0`。
+
+仅声明旧函数时，响应使用旧 `function_call` 形式且禁用并行调用；显式 `parallel_tool_calls=true` 返回错误。
+同时声明现代工具和旧函数时合并工具并使用现代响应形式，同名定义不一致或两种选择冲突时返回错误。
+现代工具历史可从中途截取，旧 `role=function` 必须能按名称找到之前尚未返回的旧调用。
+已知字段的结构和角色限制仍适用：
+非 `null` 的 `tool_calls` 仅允许出现在 assistant 消息，非 `null` 的 `tool_call_id` 仅允许出现在 tool 消息；
+无语义的 `null` 占位可忽略，tool 消息本身仍必须提供非空字符串 `tool_call_id`。
+未知内容类型不等同于扩展字段，仍明确拒绝；结构错误返回对应的 `invalid_value` /
 `missing_required_parameter` 等错误，`param` 包含嵌套路径，不包含原始字段值。
+
+映射后的参数复用 Responses 的 Provider 规则：OpenAI Codex 当前会删除 `temperature`、`top_p`、
+`max_output_tokens` 和 `prompt_cache_retention`；
+xAI 按模型处理 reasoning 档位，并过滤不支持的服务等级、缓存保留和安全标识。
+接纳参数不保证所有上游执行该控制，缓存键仍受现有客户端隔离规则处理。
+
+部分客户端向此路径发送 Responses 形状：未提供非 `null` 的 `messages` 而提供非 `null` 的 `input` 时，保留其 Responses
+输入和扩展，通过同一鉴权、Core 执行和 Provider 路径，输出仍为 Chat；`stream` 缺省为 `false`。
+同时提供非 `null` 的 `messages` 和 `input` 返回冲突错误，避免丢失输入。
 
 非流式成功响应为 `chat.completion`，只含 `choices[0]`。流式返回 `chat.completion.chunk`：
 先提供 assistant role，再输出文本、拒绝或函数调用增量，函数调用使用稳定的 `index` 和 `id`。
-成功终态发送 `finish_reason` 后以 `data: [DONE]` 结束；`include_usage=true` 时，在 `[DONE]`
+成功终态发送 `finish_reason` 后以 `data: [DONE]` 结束；`include_usage=true` 且有有效上游用量时，在 `[DONE]`
 前额外发送 `choices: []` 的用量块，其他块的 `usage` 为 `null`。中断流不保证收到最终用量。
+用量依次选择终态 response 内的快照、终态事件顶层快照、此前完整可见快照，不跨事件拼接字段；
+显式零用量有效，Chat 展示与 Core 计量使用同一份事实。工具终态快照按调用身份与增量配对，
+缺失或空参数不覆盖此前已累积的参数。公开 reasoning summary 可作为 `reasoning_content` 返回，
+不返回 raw reasoning 或 encrypted 内容。`response.done` 兼容别名按终态状态处理，失败或取消不能转为成功。
 用量将 Responses 的输入/输出 token 映射为 `prompt_tokens` / `completion_tokens`；
-`finish_reason` 区分 `stop`、`tool_calls`、`length` 和 `content_filter`。
+`finish_reason` 区分 `stop`、`tool_calls`、`length`、`content_filter`，以及旧函数模式的 `function_call`。
 Chat 响应使用独立的 `chatcmpl-...` ID，关联执行请使用上述网关响应头。
 
 协议字段依据固定版本的

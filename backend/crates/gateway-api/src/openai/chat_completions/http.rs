@@ -78,7 +78,8 @@ pub(crate) async fn chat_completions(
         started.created_at,
         model,
         decoded.include_usage,
-    );
+    )
+    .with_legacy_functions(decoded.legacy_functions);
     let response = if started.stream {
         stream_chat_response(started.session, connection_guard, encoder).await
     } else {
