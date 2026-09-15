@@ -136,12 +136,13 @@ Codex PAT 验证服务不可用和身份响应无效分别返回 `50301`、`5020
 
 ## 3. OpenAI 数据面与模型目录
 
-除下述 Responses 入站解压保护外，Responses、Images 和 standalone Search HTTP body、
+除下述 Responses / Chat Completions 入站解压保护外，Responses、Chat Completions、Images 和 standalone Search HTTP body、
 WebSocket message 和 frame 不设置网关私有长度上限；协议可接受性由上游决定。
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
 | `POST` | `/v1/responses` | OpenAI Responses JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
+| `POST` | `/v1/chat/completions` | Chat Completions 兼容 JSON；默认完整 JSON，`stream=true` 返回 SSE；参数范围见下 |
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
 | `POST` | `/v1/alpha/search` | Codex standalone web search；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/generations` | 通过 OpenAI Provider 发起图像生成；JSON 请求与响应正文原样转发 |
@@ -152,7 +153,7 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-openai-subagent` 请求头携带子代理类型；
 网关不提供独立的子代理请求路径。
 
-`POST /v1/responses` 在鉴权后按 `Content-Encoding` 解压，再解析 JSON；支持单一 `gzip`、
+`POST /v1/responses` 和 `POST /v1/chat/completions` 在鉴权后按 `Content-Encoding` 解压，再解析 JSON；支持单一 `gzip`、
 `deflate`（zlib 封装）和 `zstd`，缺省、空值或 `identity` 直接使用原始正文。gzip 多成员与 zstd
 多帧连续解码，整体展开结果最多 64 MiB，超限在继续展开前返回 `400 request_too_large`；zstd
 回溯窗口同样最多 64 MiB，不能满足该限制的帧按解码失败处理。这个限制保护入站解压资源，不是
@@ -174,12 +175,92 @@ Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行
 客户端配置的 `supports_websockets` 只控制第一段连接，不是服务端传输策略开关。
 上游在响应终态前发送 Close 1000 仍属于失败，不能按“正常关闭”计为成功。
 
-已建立模型执行的 Responses、Images 和 Search HTTP 响应使用现有 ID：
+已建立模型执行的 Responses、Chat Completions、Images 和 Search HTTP 响应使用现有 ID：
 `x-gateway-request-id` 为模型执行 ID；`x-request-id` 保留有效上游值，只有上游
 `x-oai-request-id` 时复用其值，没有上游 ID 时使用模型执行 ID。`x-oai-request-id` 不是必需字段，
 也不要求客户端识别它；OpenAI 与 xAI 路由使用相同规则。失败响应的关联 ID 不采用会话 opening ID，
 错误正文读取失败时仍返回已知上游 ID；已采集的 turn state 等允许的会话头继续按原合同交付。
 尚未建立执行的入口拒绝继续使用 middleware 的入口关联。
+
+### Chat Completions
+
+`POST /v1/chat/completions` 使用与 Responses 相同的 Client Key、模型目录和账号分组范围，
+共享日限额、周限额、并发准入、计费、错误记录及断连取消流程。它把下列已支持的字段转换为
+Responses 请求，经现有 OpenAI / xAI Provider 执行，再生成 Chat JSON 或 SSE；不是全参数透传接口。
+
+普通文本请求：
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Authorization: Bearer <client-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"<available-model>","messages":[{"role":"user","content":"你好"}]}'
+```
+
+`model` 必填且非空，`messages` 必须为非空数组。`stream` 缺省或 `null` 时为 `false`。
+下面是流式函数工具请求的 JSON 正文；工具执行仍由客户端完成，将结果作为后续 `tool` 消息发送：
+
+```json
+{
+  "model": "<available-model>",
+  "messages": [{ "role": "user", "content": "查询北京天气" }],
+  "tools": [{
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "description": "查询城市天气",
+      "parameters": {
+        "type": "object",
+        "properties": { "city": { "type": "string" } },
+        "required": ["city"]
+      }
+    }
+  }],
+  "tool_choice": "auto",
+  "stream": true,
+  "stream_options": { "include_usage": true }
+}
+```
+
+| 字段 | 支持范围 |
+| --- | --- |
+| `messages` | 按原顺序保留 `system`、`developer`、`user`、`assistant`、`tool`；文本可为字符串或 `text` 内容段数组 |
+| 用户图片 | `image_url: {url, detail}` 转为图片输入；URL 为 HTTP(S) 或 `data:image/...;base64,...`，`detail` 支持 `auto`、`low`、`high`；网关不下载图片 |
+| `assistant.tool_calls` | 仅 `function`；保留 `id`、函数名和原始 `arguments` 字符串，允许工具调用消息缺省或 `null` 的 `content` |
+| `tool` 消息 | `tool_call_id` 原样配对；`content` 为字符串或文本段数组，数组不拼接为字符串 |
+| `tools` | 仅函数工具，支持 `name`、`description`、`parameters`、`strict`；JSON Schema 内部字段保持不变，工具默认非 strict |
+| `tool_choice` | `none`、`auto`、`required` 或指定函数；`required` 需要非空工具列表，指定函数必须存在于列表 |
+| `parallel_tool_calls` | 布尔值 |
+| `response_format` | `text`、`json_object`、`json_schema`；后者支持 `name`、`schema`、`description`、`strict` |
+| `top_p` / `verbosity` | `top_p` 为 0–1 数值；`verbosity` 为 `low`、`medium`、`high`，具体模型能力仍由上游决定 |
+| `n` | 仅 `1`，缺省或 `null` 等价 |
+| `stream_options` | 仅在 `stream=true` 时设置；`include_usage=true` 请求终态用量块，`include_obfuscation=false` 可显式关闭填充；不支持 `true` |
+
+已知但未实现的非默认语义返回 `400 unsupported_parameter`，包括：`temperature`、
+`max_tokens`、`max_completion_tokens`、`reasoning_effort`、`stop`、`seed`、音频、预测输出、
+旧 `functions` / `function_call`、logprobs、非零 penalties、非空 metadata / logit_bias、
+`store=true`、非默认服务档位、缓存控制、用户/安全标识与网页搜索控制。消息的非 `null` 的 `name`（包括空字符串）
+也不能映射；历史 assistant 的非 `null` 的 `refusal` 字段和 refusal 内容段暂不支持。
+它们不会被静默删除后按成功请求执行。
+可选字段的 `null` 及中性默认值可以省略，例如 `store=false`、`logprobs=false`、penalties 为 `0`、
+`metadata={}`、`logit_bias={}`、`modalities=["text"]`、`service_tier="auto"`。
+`service_tier="default"` 表示指定普通服务等级，与 `auto` 不同，当前不支持。
+未知顶层或嵌套字段返回 `400 unknown_parameter`；结构错误返回对应的 `invalid_value` /
+`missing_required_parameter` 等错误，`param` 包含嵌套路径，不包含原始字段值。
+
+非流式成功响应为 `chat.completion`，只含 `choices[0]`。流式返回 `chat.completion.chunk`：
+先提供 assistant role，再输出文本、拒绝或函数调用增量，函数调用使用稳定的 `index` 和 `id`。
+成功终态发送 `finish_reason` 后以 `data: [DONE]` 结束；`include_usage=true` 时，在 `[DONE]`
+前额外发送 `choices: []` 的用量块，其他块的 `usage` 为 `null`。中断流不保证收到最终用量。
+用量将 Responses 的输入/输出 token 映射为 `prompt_tokens` / `completion_tokens`；
+`finish_reason` 区分 `stop`、`tool_calls`、`length` 和 `content_filter`。
+Chat 响应使用独立的 `chatcmpl-...` ID，关联执行请使用上述网关响应头。
+
+协议字段依据固定版本的
+[OpenAI Python SDK Chat 请求定义](https://github.com/openai/openai-python/blob/d421d7ab8c0a5e4e00147407ef9941c7f2bc9c09/src/openai/types/chat/completion_create_params.py)
+和 [stream options 定义](https://github.com/openai/openai-python/blob/d421d7ab8c0a5e4e00147407ef9941c7f2bc9c09/src/openai/types/chat/chat_completion_stream_options_param.py)。
+
+### Responses 与模型目录
 
 WebSocket 在尚未交付上游业务事件时合成的错误保留已确认的失败状态，以及 Provider 提取的结构化
 message/type/code；没有结构化错误时使用稳定安全文案，不把原始 HTML 或截断正文当作 message。
