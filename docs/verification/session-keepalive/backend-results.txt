@@ -1,0 +1,27 @@
+Session Keepalive — backend verification, 2026-09-18
+
+Environment: macOS Apple Silicon; Rust 1.97.0.
+RUST_MIN_STACK=16777216 CARGO_INCREMENTAL=0
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+Dedicated PostgreSQL 17 and Redis configured for workspace tests.
+
+Current workspace:
+  cargo test --manifest-path backend/Cargo.toml --workspace --test main --no-fail-fast --locked
+  Provider OpenAI: 685 tests; 677 passed, 8 failed.
+  New session_manager tests: 10 passed.
+
+Unmodified baseline b689a772c83e1360e3df1766bc6dfc539e32c43a:
+  cargo test --manifest-path backend/Cargo.toml -p provider-openai --test main --locked
+  Provider OpenAI: 675 tests; 667 passed, 8 failed.
+
+Both runs report exactly these failures:
+transport::latency::downstream_websocket_new_chain_should_preserve_continuation_after_slow_opening
+transport::latency::external_continuation_should_wait_for_a_cold_websocket
+transport::tls::http_client_hello_should_match_official_native_tls_transport
+transport::websocket::codex_backend_client_should_timeout_when_upstream_is_silent
+transport::websocket::codex_backend_client_stream_should_keep_socket_after_structural_activity
+transport::websocket::codex_backend_client_stream_should_timeout_when_active_websocket_stalls
+transport::websocket::codex_backend_client_stream_should_wait_for_terminal_after_active_websocket_gap
+transport::websocket_pool::codex_backend_client_stream_should_keep_reused_socket_after_structural_activity
+
+No failed test was disabled or weakened. Production upstream was not called.

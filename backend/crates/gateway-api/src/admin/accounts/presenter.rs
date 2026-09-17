@@ -77,6 +77,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
     }
     let (quota, refresh_token_expires_at) = account_quota_view(quota, cooldown, now);
     AccountView {
+        enable_session_keepalive: account.enable_session_keepalive,
         id: account.id.clone(),
         name: account.name,
         notes: account.notes,

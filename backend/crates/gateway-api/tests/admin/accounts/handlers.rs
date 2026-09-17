@@ -88,3 +88,47 @@ async fn quota_forecast_requires_admin_and_valid_account_query() {
         assert!(value["message"].is_string());
     }
 }
+
+#[tokio::test]
+async fn manual_state_refresh_requires_admin_and_valid_account_id() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (body, authenticated, expected) in [
+        (
+            serde_json::json!({"accountId":"acct_test"}),
+            false,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            serde_json::json!({"accountId":"bad"}),
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            serde_json::json!({"accountId":"acct_test", "token":"must-not-be-accepted"}),
+            true,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            serde_json::json!({"accountId":"acct_test"}),
+            true,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/admin/accounts/session-state/refresh")
+            .header("x-request-id", "req_state_refresh")
+            .header(header::CONTENT_TYPE, "application/json");
+        if authenticated {
+            request = request.header(header::COOKIE, "cpr_session=valid-session");
+        }
+        let response = admin::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "request: {body}");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
+}

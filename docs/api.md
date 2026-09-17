@@ -364,7 +364,7 @@ Token 明细、费用明细、用时/首字与状态。Token 和费用复用现�
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 管理员显式清除该账号的本地错误/额度/cooldown 事实并重新启用，不访问上游 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 更新指定 OpenAI 账号的 OAuth token 或 API Key 上游设置 |
-| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl? }` | 一次更新账号备注、调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
+| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl?, enableSessionKeepalive? }` | 一次更新账号备注、调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
 | `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled?, concurrencyLimit?, weight?, groupIds?, modelAccess?, outboundProxyId?, outboundProxyUrl? }` | 一次事务更新所选账号；仅修改提供的字段，至少提供一项修改 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
@@ -925,7 +925,31 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 自动结算按网关请求 ID 幂等执行。账本独立于使用统计日志，记录保留至删除 Key，
 不受 `usageRetentionDays` 影响。
 
+### 会话 State 刷新
+
+账号列表返回 `enableSessionKeepalive`，默认 `false`。`POST /api/admin/accounts/update` 可携带该布尔值；省略或 `null` 保留原值。有效范围为 OpenAI OAuth 账号；开启不要求先判断业务故障原因。其他必需更新字段仍按原接口提交。
+
+`POST /api/admin/accounts/session-state/refresh` 使用管理员鉴权，JSON 请求为 `{ "accountId": "acct_..." }`，拒绝未知字段。账号必须启用、保活开启且 OAuth 凭据可用，另须配置全局 `oamProxy`。一次刷新精确模型 `5.6 sol` 和 `6`，遵守账号模型权限，不接受客户端 Token、代理或 State。
+
+返回标准管理响应信封，`data` 示例：
+
+```json
+{
+  "accountId": "acct_example",
+  "models": [
+    { "model": "5.6 sol", "refreshedAt": "2026-09-18T02:00:00Z", "expireAt": 1789700400, "error": null },
+    { "model": "6", "refreshedAt": null, "expireAt": null, "error": "上游拒绝探活请求" }
+  ]
+}
+```
+
+`refreshedAt` 为 UTC 时间，`expireAt` 为 Unix 秒。成功项本地 TTL 为 3600 秒；失败项不延长旧 State 的 TTL。HTTP 200 表示已完成本次逐模型处理，调用方必须检查各项 `error`，可全部失败。前置条件错误为 400，JSON 字段类型或未知字段错误为 422，不存在为 404，同账号刷新中或全局探活并发已满为 409，依赖不可用为 503，未授权为 401。响应不包含 State 原文，并带 `Cache-Control: no-store`。
+
+手动刷新不改变后台周期；后台每轮结束随机等待 3000–3480 秒。运维和业务分别使用独立 Client 与各自代理，业务仍走原账号出口。该实验性跨轮次覆盖与已核验官方 State 合同的偏离、模型名限制及停止方式见 [设计说明](session-keepalive-design.md)。
+
 ## 8. 运行设置
+
+`oamProxy` 为独立运维探活代理 URL，默认空字符串。更新时省略或 `null` 保留，空字符串停止后续探活，非空沿用账号出站代理 URL 校验。管理员读取接口返回原值用于编辑，可能包含代理认证，应按敏感配置处理；错误、Debug 和审计不记录原文。清空代理不立即清除已有有效 State；立即停止覆盖应关闭账号 `enableSessionKeepalive`。
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -939,6 +963,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 设置更新字段包括：
 
 ```text
+oamProxy
 disableFast
 requestLocationEnabled
 requestLocation

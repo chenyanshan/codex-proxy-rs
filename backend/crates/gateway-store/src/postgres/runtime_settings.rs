@@ -19,6 +19,7 @@ use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
+    pub oam_proxy: String,
     pub disable_fast: bool,
     pub config_revision: Revision,
     pub admin_api_key: Option<String>,
@@ -110,6 +111,7 @@ impl fmt::Debug for RuntimeSettings {
 
 #[derive(Clone)]
 pub struct RuntimeSettingsUpdate {
+    pub oam_proxy: Option<String>,
     pub disable_fast: Option<bool>,
     pub admin_api_key: Option<String>,
     pub refresh_margin_seconds: u64,
@@ -157,6 +159,14 @@ impl fmt::Debug for RuntimeSettingsUpdate {
 
 impl RuntimeSettingsUpdate {
     pub fn validate(&self) -> StoreResult<()> {
+        if self.oam_proxy.as_deref().is_some_and(|value| {
+            !value.is_empty() && gateway_core::account::OutboundProxy::parse(value).is_err()
+        }) {
+            return Err(StoreError::InvalidData {
+                entity: "runtime settings",
+                message: "invalid OAM proxy".to_owned(),
+            });
+        }
         if self.request_location.validate().is_err()
             || self.responses_max_decompressed_body_bytes == 0
             || isize::try_from(self.responses_max_decompressed_body_bytes).is_err()
@@ -241,7 +251,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     account_auto_freeze_enabled, account_auto_freeze_threshold,
                     account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                    account_auto_freeze_adaptive_concurrency
+                    account_auto_freeze_adaptive_concurrency, oam_proxy
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -255,6 +265,26 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
 }
 
 impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
+    fn load_oam_proxy(
+        &self,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<Option<gateway_core::account::OutboundProxy>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            let settings = self
+                .load_runtime_settings()
+                .await
+                .map_err(|_| provider_unavailable("load OAM proxy"))?;
+            if settings.oam_proxy.is_empty() {
+                return Ok(None);
+            }
+            gateway_core::account::OutboundProxy::parse(&settings.oam_proxy)
+                .map(Some)
+                .map_err(|_| provider_invalid("decode OAM proxy"))
+        })
+    }
+
     fn load_refresh_policy(
         &self,
     ) -> futures::future::BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
@@ -303,7 +333,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 account_auto_freeze_enabled, account_auto_freeze_threshold,
                 account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                account_auto_freeze_adaptive_concurrency
+                account_auto_freeze_adaptive_concurrency, oam_proxy
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -352,6 +382,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      request_location_enabled = $24,
                      responses_max_decompressed_body_bytes = $25,
                      disable_fast = coalesce($26, disable_fast),
+                     oam_proxy = coalesce($27, oam_proxy),
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -394,6 +425,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
             .map_err(|_| invalid_numeric())?,
     )
     .bind(update.disable_fast)
+    .bind(update.oam_proxy.as_deref())
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -443,6 +475,7 @@ pub(crate) async fn update_admin_api_key_in_transaction(
 
 #[derive(sqlx::FromRow)]
 struct RuntimeSettingsRow {
+    oam_proxy: String,
     disable_fast: bool,
     config_revision: i64,
     admin_api_key: Option<String>,
@@ -475,6 +508,7 @@ struct RuntimeSettingsRow {
 
 fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
     Ok(RuntimeSettings {
+        oam_proxy: row.oam_proxy,
         config_revision: Revision::new(to_u64(row.config_revision)?)?,
         admin_api_key: row.admin_api_key,
         refresh_margin_seconds: to_u64(row.refresh_margin_seconds)?,

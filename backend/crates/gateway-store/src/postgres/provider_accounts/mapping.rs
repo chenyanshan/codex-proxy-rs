@@ -6,6 +6,7 @@ pub(crate) fn admin_account_record(
     summary: ProviderAccountSummary,
 ) -> AdminStoreResult<AccountRecord> {
     Ok(AccountRecord {
+        enable_session_keepalive: summary.enable_session_keepalive,
         outbound_proxy: summary.outbound_proxy,
         id: summary.id,
         provider_kind: ProviderKind::new(summary.provider_kind).map_err(|_| {

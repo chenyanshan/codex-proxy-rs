@@ -31,9 +31,10 @@ use super::{
 pub type ModelMappings = BTreeMap<String, String>;
 
 /// 运行配置投影与设置页字段的聚合响应。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
+    pub oam_proxy: String,
     pub disable_fast: bool,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -63,9 +64,10 @@ pub struct RuntimeSettingsView {
 }
 
 /// 原子替换全局运行参数的请求。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
+    pub oam_proxy: Option<String>,
     pub disable_fast: Option<bool>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -177,6 +179,7 @@ impl UpdateRuntimeSettingsRequest {
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
         self.validate()?;
         Ok(ReplaceRuntimeSettings {
+            oam_proxy: self.oam_proxy,
             disable_fast: self.disable_fast,
             request_location_enabled: self.request_location_enabled,
             request_location: self
@@ -220,6 +223,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
             disable_fast: settings.disable_fast,
+            oam_proxy: settings.oam_proxy,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
             model_mappings: wire_model_mappings(settings.model_mappings),
@@ -578,4 +582,22 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
 
 fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
     map_admin_service_error(error)
+}
+
+impl fmt::Debug for RuntimeSettingsView {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeSettingsView")
+            .field("oam_proxy", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for UpdateRuntimeSettingsRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UpdateRuntimeSettingsRequest")
+            .field("oam_proxy", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }

@@ -111,7 +111,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let rows = sqlx::query(
             "select location_country, location_region, location_city, location_timezone, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, model_access_json, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, enable_session_keepalive, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
@@ -571,6 +571,12 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             // 凭据 CAS、普通设置和审计共享事务，任何设置失败都回滚凭据更新。
             if let Some(settings) = &command.settings {
                 let ids = std::slice::from_ref(&settings.account_id);
+                update_session_keepalive_in_transaction(
+                    &mut transaction,
+                    ids,
+                    settings.enable_session_keepalive,
+                )
+                .await?;
                 update_provider_accounts_scheduling_in_transaction(
                     &mut transaction,
                     ids,
@@ -622,6 +628,12 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             .map_err(|_| postgres_unavailable("begin provider account admin state change"))?;
         let result = async {
             let revision = bump_config_revision_in_transaction(&mut transaction).await?;
+            update_session_keepalive_in_transaction(
+                &mut transaction,
+                &command.account_ids,
+                command.enable_session_keepalive,
+            )
+            .await?;
             update_provider_accounts_scheduling_in_transaction(
                 &mut transaction,
                 &command.account_ids,
@@ -1131,4 +1143,22 @@ pub(crate) async fn finish_admin_transaction<T>(
             Err(error)
         }
     }
+}
+
+async fn update_session_keepalive_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_ids: &[String],
+    enabled: Option<bool>,
+) -> StoreResult<()> {
+    if let Some(enabled) = enabled {
+        sqlx::query(
+            "update provider_accounts set enable_session_keepalive = $2 where id = any($1::text[])",
+        )
+        .bind(account_ids)
+        .bind(enabled)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("update session keepalive"))?;
+    }
+    Ok(())
 }

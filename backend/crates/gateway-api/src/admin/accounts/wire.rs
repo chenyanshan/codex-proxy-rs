@@ -266,6 +266,7 @@ pub struct AccountSummaryView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
+    pub enable_session_keepalive: bool,
     pub outbound_proxy_endpoint: Option<String>,
     pub id: String,
     pub name: String,

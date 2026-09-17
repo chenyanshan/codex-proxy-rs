@@ -723,6 +723,7 @@ const fn status_projection(status: AccountStatus) -> AccountStatusProjection {
 /// 账号持久事实；代理认证信息只通过显式 secret accessor 读取。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccount {
+    enable_session_keepalive: bool,
     id: ProviderAccountId,
     provider: ProviderKind,
     name: String,
@@ -748,6 +749,17 @@ pub struct ProviderAccount {
 }
 
 impl ProviderAccount {
+    #[must_use]
+    pub const fn enable_session_keepalive(&self) -> bool {
+        self.enable_session_keepalive
+    }
+
+    #[must_use]
+    pub const fn with_session_keepalive(mut self, enabled: bool) -> Self {
+        self.enable_session_keepalive = enabled;
+        self
+    }
+
     /// 创建账号快照。
     #[must_use]
     pub const fn new(
@@ -770,6 +782,7 @@ impl ProviderAccount {
             authentication_kind,
             revision,
             enabled: true,
+            enable_session_keepalive: false,
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
             model_access: super::AccountModelAccess::all(),

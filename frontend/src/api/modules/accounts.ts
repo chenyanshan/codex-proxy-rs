@@ -119,6 +119,7 @@ export interface AccountModelAccess {
 }
 
 export interface Account {
+  enableSessionKeepalive: boolean
   outboundProxyEndpoint: string | null
   id: string
   name: string
@@ -373,6 +374,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 }
 
 interface AccountUpdateParam {
+  enableSessionKeepalive?: boolean
   outboundProxyUrl?: string
   outboundProxyId?: string
   accountId: string
@@ -658,5 +660,25 @@ export function updateAccountApiKey(data: { accountId: string, baseUrl: string, 
     url: '/api/admin/accounts/rotate',
     method: 'POST',
     data: { provider: 'openai', ...data },
+  })
+}
+
+export interface SessionStateRefresh {
+  accountId: string
+  models: {
+    model: string
+    refreshedAt: string | null
+    expireAt: number | null
+    error: string | null
+  }[]
+}
+
+export function refreshAccountSessionState(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<SessionStateRefresh>({
+    url: '/api/admin/accounts/session-state/refresh',
+    method: 'POST',
+    data,
+    timeout: 70000,
+    ...options,
   })
 }

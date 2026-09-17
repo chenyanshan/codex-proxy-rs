@@ -110,6 +110,13 @@ impl ProviderAdminError {
 /// 全部由 [`crate::ports::store::AccountStore`] 提交。运行时资源通知只在事务成功后发生。
 #[async_trait]
 pub trait ProviderAdmin: Send + Sync {
+    async fn refresh_session_state(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<crate::model::accounts::SessionStateRefresh, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
     fn provider_kind(&self) -> &ProviderKind;
 
     /// 将原始套餐值投影为展示名称；默认保留未知 Provider 的原始名称。

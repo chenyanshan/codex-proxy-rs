@@ -9,6 +9,7 @@ use super::TestDatabase;
 
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
+        oam_proxy: None,
         disable_fast: None,
         request_location_enabled: false,
         request_location: Default::default(),
@@ -454,5 +455,66 @@ async fn disable_fast_persists_and_omitted_updates_preserve_the_restriction() {
         assert_eq!(snapshot.settings.disable_fast, expected);
         assert_eq!(snapshot.config_revision, revision);
     }
+    database.close().await;
+}
+
+#[test]
+fn oam_proxy_should_reject_invalid_urls_without_disclosing_credentials() {
+    let mut settings = settings_with_margin(3_600);
+    settings.oam_proxy = Some("https://test-user:test-secret@proxy.invalid:8181".to_owned());
+    assert!(settings.validate().is_ok());
+    assert!(!format!("{settings:?}").contains("test-secret"));
+    settings.oam_proxy = Some("https://test-user:test-secret@proxy.invalid:8181/path".to_owned());
+    let error = settings.validate().expect_err("reject proxy with path");
+    assert!(!error.to_string().contains("test-secret"));
+}
+
+#[tokio::test]
+async fn oam_proxy_should_default_empty_preserve_omission_and_allow_explicit_clear() {
+    let Some(database) = TestDatabase::create("oam_proxy").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    assert!(
+        repository
+            .load_runtime_settings()
+            .await
+            .expect("load defaults")
+            .oam_proxy
+            .is_empty()
+    );
+    let mut update = settings_with_margin(3_600);
+    update.oam_proxy = Some("http://test-user:test-secret@proxy.invalid:8181".to_owned());
+    repository
+        .update_runtime_settings(update)
+        .await
+        .expect("save proxy");
+    repository
+        .update_runtime_settings(settings_with_margin(1_800))
+        .await
+        .expect("save unrelated field");
+    let settings = repository
+        .load_runtime_settings()
+        .await
+        .expect("reload proxy");
+    assert_eq!(
+        settings.oam_proxy,
+        "http://test-user:test-secret@proxy.invalid:8181"
+    );
+    assert!(!format!("{settings:?}").contains("test-secret"));
+    let mut update = settings_with_margin(1_800);
+    update.oam_proxy = Some(String::new());
+    repository
+        .update_runtime_settings(update)
+        .await
+        .expect("clear proxy");
+    assert!(
+        repository
+            .load_runtime_settings()
+            .await
+            .expect("reload cleared proxy")
+            .oam_proxy
+            .is_empty()
+    );
     database.close().await;
 }

@@ -47,6 +47,13 @@ const CONNECTION_TEST_INPUT: &str = "Reply with exactly OK.";
 /// 统一账号页消费的服务。
 #[async_trait]
 pub trait AccountsService: Send + Sync {
+    async fn refresh_session_state(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<crate::model::accounts::SessionStateRefresh, AdminError> {
+        Err(AdminError::invalid("当前 Provider 不支持 State 刷新"))
+    }
+
     async fn list(&self, query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError>;
 
     async fn export(
@@ -357,6 +364,17 @@ impl DefaultAccountsService {
 
 #[async_trait]
 impl AccountsService for DefaultAccountsService {
+    async fn refresh_session_state(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<crate::model::accounts::SessionStateRefresh, AdminError> {
+        let (_, provider) = self.provider_for_account(account_id).await?;
+        provider
+            .refresh_session_state(account_id)
+            .await
+            .map_err(|error| map_provider_error(error, "session state refresh"))
+    }
+
     async fn list(&self, query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError> {
         let runtime = self
             .account_runtime

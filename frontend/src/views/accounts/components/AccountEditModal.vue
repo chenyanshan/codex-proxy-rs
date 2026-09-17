@@ -6,6 +6,7 @@ import type { AccountGroup, AccountModelAccess } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountApiKeyFields from './AccountApiKeyFields.vue'
@@ -30,6 +31,7 @@ const open = defineModel<boolean>({ required: true })
 const apiKey = defineModel<ApiKeyAccountForm>('apiKey', { required: true })
 const notes = defineModel<string>('notes', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
+const enableSessionKeepalive = defineModel<boolean>('enableSessionKeepalive', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -90,6 +92,14 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
       />
+
+      <div v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'" class="flex items-center justify-between gap-3">
+        <div class="grid gap-1">
+          <span class="text-cp font-medium text-cp-text-secondary">会话保活</span>
+          <span class="text-cp-sm text-cp-text-tertiary">通过运维代理定期探活，也可在账户页面手动刷新。</span>
+        </div>
+        <BaseSwitch v-model="enableSessionKeepalive" label="切换账号会话保活" :disabled="saving" />
+      </div>
 
       <BaseFormItem label="备注">
         <BaseTextarea

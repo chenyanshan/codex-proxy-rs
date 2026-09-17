@@ -40,7 +40,7 @@ pub(super) fn diagnostics(
     CodexUpstreamDiagnostics::from_headers(status_code, headers)
 }
 
-pub(super) fn turn_state(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn turn_state(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-codex-turn-state")
         .and_then(|value| value.to_str().ok())

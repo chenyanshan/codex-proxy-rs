@@ -105,6 +105,13 @@ impl MemoryAccountStore {
         .expect("seed API account");
     }
 
+    pub(crate) fn set_session_keepalive(&self, id: &str, enabled: bool) {
+        let id = ProviderAccountId::new(id).expect("account ID");
+        let mut accounts = self.accounts.lock().expect("account store lock");
+        let stored = accounts.get_mut(&id).expect("seeded account");
+        stored.account = stored.account.clone().with_session_keepalive(enabled);
+    }
+
     pub(crate) fn account(&self, id: &str) -> Option<ProviderAccount> {
         let id = ProviderAccountId::new(id).ok()?;
         self.accounts
@@ -600,6 +607,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         rebuild.last_error_reason,
         rebuild.last_error_message,
     )
+    .with_session_keepalive(current.enable_session_keepalive())
     .with_scheduling(current.concurrency_limit(), current.weight())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
 }

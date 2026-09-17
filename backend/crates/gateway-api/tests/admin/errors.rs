@@ -469,6 +469,7 @@ mod provider {
         };
         AccountPageItem {
             account: AccountRecord {
+                enable_session_keepalive: false,
                 notes: None,
                 model_access: Default::default(),
                 id: "acct_error_test".to_owned(),

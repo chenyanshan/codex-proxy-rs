@@ -73,6 +73,7 @@ const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 3;
 
 /// OpenAI 对终态 Admin port 的唯一实现。
 pub(crate) struct OpenAiAdminProvider {
+    sessions: Arc<crate::SessionManager>,
     provider_kind: ProviderKind,
     profile: CodexWireProfileState,
     accounts: Arc<dyn ProviderAccountStore>,
@@ -86,6 +87,7 @@ pub(crate) struct OpenAiAdminProvider {
 }
 
 pub(crate) struct OpenAiAdminServices {
+    pub(crate) sessions: Arc<crate::SessionManager>,
     pub(crate) credentials: Arc<CodexCredentialAdminService>,
     pub(crate) oauth: Arc<dyn CodexOAuthAdmin>,
     pub(crate) profile_statistics: Arc<CodexCredentialProfileService>,
@@ -107,6 +109,7 @@ impl OpenAiAdminProvider {
             provider_kind,
             profile,
             accounts,
+            sessions: services.sessions,
             credentials: services.credentials,
             oauth: services.oauth,
             profile_statistics: services.profile_statistics,
@@ -163,6 +166,13 @@ impl OpenAiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for OpenAiAdminProvider {
+    async fn refresh_session_state(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<gateway_admin::model::accounts::SessionStateRefresh, ProviderAdminError> {
+        self.sessions.refresh(account_id).await
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.provider_kind
     }
@@ -192,12 +202,16 @@ impl ProviderAdmin for OpenAiAdminProvider {
     }
 
     async fn account_unavailable(&self, account_id: &ProviderAccountId) {
+        self.sessions.invalidate(account_id).await;
         self.websocket_pool.evict_account(account_id.as_str()).await;
     }
 
     async fn account_facts_changed(&self, account_ids: &[ProviderAccountId]) {
         if account_ids.is_empty() {
             return;
+        }
+        for id in account_ids {
+            self.sessions.invalidate(id).await;
         }
         self.quota.invalidate_scheduling(account_ids);
         if let Err(error) = self.catalog.invalidate() {

@@ -21,6 +21,7 @@ export function useAccountEditor(options: {
   const editingAccountId = shallowRef<string | null>(null)
   const notes = shallowRef('')
   const schedulingEnabled = shallowRef(true)
+  const enableSessionKeepalive = shallowRef(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
@@ -69,6 +70,7 @@ export function useAccountEditor(options: {
     proxyMode.value = 'preserve'
     proxyId.value = ''
     schedulingEnabled.value = account.enabled
+    enableSessionKeepalive.value = account.enableSessionKeepalive
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
     modelAccess.value = { ...account.modelAccess, models: [...account.modelAccess.models] }
@@ -116,6 +118,7 @@ export function useAccountEditor(options: {
         notes: notes.value,
         outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
         enabled: schedulingEnabled.value,
+        enableSessionKeepalive: enableSessionKeepalive.value,
         concurrencyLimit: scheduling.values.concurrencyLimit,
         weight: scheduling.values.weight,
         modelAccess: modelAccess.value,
@@ -150,6 +153,7 @@ export function useAccountEditor(options: {
     proxyMode.value = 'preserve'
     proxyId.value = ''
     schedulingEnabled.value = true
+    enableSessionKeepalive.value = false
     concurrencyLimit.value = ''
     weight.value = '1'
     modelAccess.value = undefined
@@ -164,6 +168,7 @@ export function useAccountEditor(options: {
     editingAccount,
     notes,
     schedulingEnabled,
+    enableSessionKeepalive,
     concurrencyLimit,
     weight,
     modelAccess,
