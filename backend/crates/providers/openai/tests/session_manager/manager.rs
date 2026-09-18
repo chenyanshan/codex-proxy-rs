@@ -54,7 +54,7 @@ async fn disabled_accounts_other_models_and_missing_proxy_never_refresh_or_overr
         manager.refresh(&id).await.unwrap_err().kind(),
         ProviderAdminErrorKind::Invalid
     );
-    let mut req = request("6");
+    let mut req = request("gpt-6-astra");
     manager
         .rewrite(&store.account("acct_a").unwrap(), &mut req)
         .await;
@@ -66,7 +66,7 @@ async fn disabled_accounts_other_models_and_missing_proxy_never_refresh_or_overr
             .await
             .is_err()
     );
-    for model in ["gpt-6-astra", "6 ", "5.6 Sol"] {
+    for model in ["5.6 sol", "6", "gpt-6", "gpt-6-astra ", "GPT-5.6-sol"] {
         let mut req = request(model);
         manager
             .rewrite(&store.account("acct_b").unwrap(), &mut req)
@@ -86,19 +86,19 @@ async fn partial_failure_keeps_previous_state_without_extending_its_expiry() {
     let id = ProviderAccountId::new("acct_a").unwrap();
     manager.refresh(&id).await.unwrap();
     proxy.reset().await;
-    mock_model(&proxy, "acct_a", "5.6 sol", ResponseTemplate::new(500)).await;
-    mock_model(&proxy, "acct_a", "6", success("new-state")).await;
+    mock_model(&proxy, "acct_a", "gpt-5.6-sol", ResponseTemplate::new(500)).await;
+    mock_model(&proxy, "acct_a", "gpt-6-astra", success("new-state")).await;
     let result = manager.refresh(&id).await.unwrap();
     assert!(result.models[0].error.is_some());
     assert!(result.models[1].error.is_none());
-    let mut sol = request("5.6 sol");
+    let mut sol = request("gpt-5.6-sol");
     manager
         .rewrite(&store.account("acct_a").unwrap(), &mut sol)
         .await;
     assert_eq!(sol.turn_state.as_deref(), Some("old-state"));
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(3600)).await;
-    let mut expired = request("5.6 sol");
+    let mut expired = request("gpt-5.6-sol");
     manager
         .rewrite(&store.account("acct_a").unwrap(), &mut expired)
         .await;
@@ -138,7 +138,7 @@ async fn duplicate_refresh_is_rejected_and_invalidated_inflight_results_cannot_r
     manager.invalidate(&id).await;
     let result = pending.await.unwrap().unwrap();
     assert!(result.models.iter().all(|item| item.error.is_some()));
-    let mut req = request("6");
+    let mut req = request("gpt-6-astra");
     manager
         .rewrite(&store.account("acct_a").unwrap(), &mut req)
         .await;
@@ -152,7 +152,7 @@ async fn rate_limit_honors_retry_after_and_does_not_send_the_second_model() {
     mock_model(
         &proxy,
         "acct_a",
-        "5.6 sol",
+        "gpt-5.6-sol",
         ResponseTemplate::new(429).insert_header("retry-after", "60"),
     )
     .await;
@@ -168,11 +168,11 @@ async fn rate_limit_honors_retry_after_and_does_not_send_the_second_model() {
 async fn missing_state_or_failed_sse_completion_never_creates_cache_entries() {
     let proxy = MockServer::start().await;
     let (store, _, manager) = fixture(Some(&proxy.uri())).await;
-    mock_model(&proxy, "acct_a", "5.6 sol", ResponseTemplate::new(200)).await;
+    mock_model(&proxy, "acct_a", "gpt-5.6-sol", ResponseTemplate::new(200)).await;
     mock_model(
         &proxy,
         "acct_a",
-        "6",
+        "gpt-6-astra",
         ResponseTemplate::new(200)
             .insert_header("x-codex-turn-state", "unusable")
             .set_body_raw(
@@ -186,7 +186,7 @@ async fn missing_state_or_failed_sse_completion_never_creates_cache_entries() {
         .await
         .unwrap();
     assert!(result.models.iter().all(|model| model.error.is_some()));
-    let mut req = request("6");
+    let mut req = request("gpt-6-astra");
     manager
         .rewrite(&store.account("acct_a").unwrap(), &mut req)
         .await;
@@ -237,7 +237,7 @@ async fn rewritten_business_http_uses_original_proxy_and_never_oam_pool() {
     )
     .for_account(&account)
     .unwrap();
-    let mut req = request("6");
+    let mut req = request("gpt-6-astra");
     req.force_http_sse = true;
     manager.rewrite(&account, &mut req).await;
     let context = CodexRequestContext {
@@ -292,7 +292,7 @@ async fn credential_revision_change_prevents_reusing_previous_state() {
         current.access_token_expires_at(),
     )
     .with_session_keepalive(true)
-    .with_session_keepalive_models(vec!["5.6 sol".to_owned(), "6".to_owned()])
+    .with_session_keepalive_models(vec!["gpt-5.6-sol".to_owned(), "gpt-6-astra".to_owned()])
     .with_account_facts(
         true,
         current.credential_state(),
@@ -300,10 +300,10 @@ async fn credential_revision_change_prevents_reusing_previous_state() {
         None,
         None,
     );
-    let mut req = request("6");
+    let mut req = request("gpt-6-astra");
     manager.rewrite(&current, &mut req).await;
     assert_eq!(req.turn_state.as_deref(), Some("old-credential-state"));
-    let mut req = request("6");
+    let mut req = request("gpt-6-astra");
     manager.rewrite(&rotated, &mut req).await;
     assert_eq!(req.turn_state.as_deref(), Some("client-state"));
 }
@@ -367,7 +367,7 @@ async fn selected_models_are_exact_and_support_more_than_two() {
 async fn temporary_failure_retries_the_same_model_and_caches_only_success() {
     let proxy = MockServer::start().await;
     let (store, _, manager) = fixture(Some(&proxy.uri())).await;
-    store.set_session_models("acct_a", vec!["6".to_owned()]);
+    store.set_session_models("acct_a", vec!["gpt-6-astra".to_owned()]);
     let attempts = Arc::new(AtomicUsize::new(0));
     let count = attempts.clone();
     Mock::given(method("POST"))
@@ -386,13 +386,13 @@ async fn temporary_failure_retries_the_same_model_and_caches_only_success() {
         .unwrap();
     assert!(result.models[0].error.is_none());
     assert_eq!(attempts.load(Ordering::SeqCst), 3);
-    let mut req = request("6");
+    let mut req = request("gpt-6-astra");
     manager
         .rewrite(&store.account("acct_a").unwrap(), &mut req)
         .await;
     assert_eq!(req.turn_state.as_deref(), Some("retried-state"));
     proxy.reset().await;
-    mock_model(&proxy, "acct_a", "6", ResponseTemplate::new(500)).await;
+    mock_model(&proxy, "acct_a", "gpt-6-astra", ResponseTemplate::new(500)).await;
     let result = manager
         .refresh(&ProviderAccountId::new("acct_a").unwrap())
         .await
@@ -405,7 +405,7 @@ async fn temporary_failure_retries_the_same_model_and_caches_only_success() {
             .contains("已尝试 3 次")
     );
     assert_eq!(proxy.received_requests().await.unwrap().len(), 3);
-    let mut req = request("6");
+    let mut req = request("gpt-6-astra");
     manager
         .rewrite(&store.account("acct_a").unwrap(), &mut req)
         .await;
@@ -416,7 +416,7 @@ async fn temporary_failure_retries_the_same_model_and_caches_only_success() {
 async fn short_retry_after_is_honored_before_retrying() {
     let proxy = MockServer::start().await;
     let (store, _, manager) = fixture(Some(&proxy.uri())).await;
-    store.set_session_models("acct_a", vec!["6".to_owned()]);
+    store.set_session_models("acct_a", vec!["gpt-6-astra".to_owned()]);
     let times = Arc::new(Mutex::new(Vec::new()));
     let captured = times.clone();
     Mock::given(method("POST"))

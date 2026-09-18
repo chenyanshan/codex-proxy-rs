@@ -929,7 +929,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 ### 会话 State 刷新
 
-账号列表返回 `enableSessionKeepalive`，默认 `false`。`POST /api/admin/accounts/update` 可携带该布尔值；省略或 `null` 保留原值。有效范围为 OpenAI OAuth 账号；开启不要求先判断业务故障原因。账号列表还返回 `sessionKeepaliveModels`，默认 `["5.6 sol", "6"]`；账号更新可提交 1～32 个唯一的上游模型 ID，每个 1～128 字节且无首尾空白或控制字符，省略或 null 保留。其他必需更新字段仍按原接口提交。
+账号列表返回 `enableSessionKeepalive`，默认 `false`。`POST /api/admin/accounts/update` 可携带该布尔值；省略或 `null` 保留原值。有效范围为 OpenAI OAuth 账号；开启不要求先判断业务故障原因。账号列表还返回 `sessionKeepaliveModels`，默认 `["gpt-5.6-sol", "gpt-6-astra"]`；账号更新可提交 1～32 个唯一的上游模型 ID，每个 1～128 字节且无首尾空白或控制字符，省略或 null 保留。其他必需更新字段仍按原接口提交。
 
 `POST /api/admin/accounts/session-state/refresh` 使用管理员鉴权，JSON 请求为 `{ "accountId": "acct_..." }`，拒绝未知字段。账号必须启用、保活开启且 OAuth 凭据可用，另须开启全局 `sessionKeepaliveEnabled` 并存在测试通过的动态代理。一次刷新该账号 `sessionKeepaliveModels` 中的所有精确模型，遵守账号模型权限，不接受客户端 Token、代理或 State。
 
@@ -939,8 +939,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 {
   "accountId": "acct_example",
   "models": [
-    { "model": "5.6 sol", "refreshedAt": "2026-09-18T02:00:00Z", "expireAt": 1789700400, "error": null },
-    { "model": "6", "refreshedAt": null, "expireAt": null, "error": "上游拒绝重写请求" }
+    { "model": "gpt-5.6-sol", "refreshedAt": "2026-09-18T02:00:00Z", "expireAt": 1789700400, "error": null },
+    { "model": "gpt-6-astra", "refreshedAt": null, "expireAt": null, "error": "上游拒绝重写请求" }
   ]
 }
 ```

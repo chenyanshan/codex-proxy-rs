@@ -34,7 +34,7 @@ use crate::{
     },
 };
 
-pub const SESSION_KEEPALIVE_MODELS: [&str; 2] = ["5.6 sol", "6"];
+pub const SESSION_KEEPALIVE_MODELS: [&str; 2] = ["gpt-5.6-sol", "gpt-6-astra"];
 const TTL_SECONDS: i64 = 3600;
 const MAX_PROBE_ATTEMPTS: u32 = 3;
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(30);

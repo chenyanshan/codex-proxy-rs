@@ -15,11 +15,11 @@ const catalog = ref<string[]>([])
 const manual = ref('')
 const inputError = ref('')
 const request = useRequestState()
-const models = computed(() => [...new Set([...catalog.value, ...selected.value])])
+const availableModels = computed(() => [...new Set(catalog.value)].filter(model => !selected.value.includes(model)))
 function select(id: string, checked: boolean) {
   if (props.disabled)
     return
-  if (checked && selected.value.length >= 32) {
+  if (checked && !selected.value.includes(id) && selected.value.length >= 32) {
     inputError.value = '最多选择 32 个重写模型'
     return
   }
@@ -60,8 +60,19 @@ watch(() => props.accountId, () => {
   <BaseFormItem label="State 重写模型" description="自动使用全局动态代理。每个模型独立发送 hi、提取并缓存 State，互不混用。请选择实际的上游模型 ID（最多 32 个）。">
     <div class="grid gap-3">
       <BaseScrollbar max-height="12rem">
-        <div class="grid grid-cols-2 gap-2" role="group" aria-label="选择重写模型">
-          <BaseCheckbox v-for="model in models" :key="model" :label="model" :title="model" show-label :model-value="selected.includes(model)" :disabled="disabled" @update:model-value="select(model, $event)" />
+        <div class="grid gap-3">
+          <p class="m-0 text-cp-sm text-cp-text-secondary">
+            已选模型（{{ selected.length }}/32）
+          </p>
+          <div class="grid grid-cols-2 gap-2" role="group" aria-label="已选重写模型">
+            <BaseCheckbox v-for="model in selected" :key="model" :label="model" :title="model" show-label :model-value="true" :disabled="disabled" @update:model-value="select(model, $event)" />
+          </div>
+          <p v-if="availableModels.length" class="m-0 text-cp-sm text-cp-text-secondary">
+            可添加模型
+          </p>
+          <div v-if="availableModels.length" class="grid grid-cols-2 gap-2" role="group" aria-label="可添加重写模型">
+            <BaseCheckbox v-for="model in availableModels" :key="model" :label="model" :title="model" show-label :model-value="false" :disabled="disabled" @update:model-value="select(model, $event)" />
+          </div>
         </div>
       </BaseScrollbar>
       <div class="flex gap-2">

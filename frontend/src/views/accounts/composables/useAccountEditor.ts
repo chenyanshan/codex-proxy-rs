@@ -72,7 +72,7 @@ export function useAccountEditor(options: {
     proxyId.value = ''
     schedulingEnabled.value = account.enabled
     enableSessionKeepalive.value = account.enableSessionKeepalive
-    sessionKeepaliveModels.value = [...(account.sessionKeepaliveModels ?? ['5.6 sol', '6'])]
+    sessionKeepaliveModels.value = [...(account.sessionKeepaliveModels ?? ['gpt-5.6-sol', 'gpt-6-astra'])]
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
     modelAccess.value = { ...account.modelAccess, models: [...account.modelAccess.models] }

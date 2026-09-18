@@ -12,7 +12,7 @@
 | 重写诊断与脱敏 | `backend/crates/providers/openai/src/session_manager/diagnostics.rs` |
 | 共用测试请求构造 | `backend/crates/providers/openai/src/transport/request.rs` |
 | 动态代理隔离与测试准入 | Store 的 `postgres/proxies.rs`、`runtime_settings.rs` |
-| 持久化 | `backend/migrations/0017_session_keepalive_controls.sql` |
+| 持久化 | `backend/migrations/0017_session_keepalive_controls.sql`、`0018_session_rewrite_model_ids.sql` |
 | 设置页风险确认 | `frontend/src/views/settings/components/SessionKeepaliveCard.vue` |
 | 动态代理页面 | `frontend/src/views/proxies/` |
 | 账户模型选择与刷新 | `frontend/src/views/accounts/components/AccountSessionModelsField.vue`、`AccountSessionStateModal.vue` |
@@ -49,14 +49,17 @@ Cargo 使用 `RUST_MIN_STACK=16777216 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBU
 
 15 项 Session Manager 测试覆盖账户与模型隔离、三个自定义模型、真实本地 HTTP 双出口、TTL、在途失效、重复刷新、429 冷却、有限重试及 Retry-After、完整结构化诊断字段与嵌套认证脱敏。Store 测试覆盖单个动态代理限制、ID/URL/导入绑定拒绝、地址变化清除测试结果、全局默认关闭、测试准入、模型持久化与快照投影。Admin/API 测试覆盖风险确认、请求合同和错误边界。
 
+模型 ID 与选择器修正后的增量验证：`cargo test -p provider-openai session_manager --locked` 15 项通过，`cargo test -p gateway-store session_ --locked` 13 项通过（含账号默认值/存量迁移 2 项）；相关 crate 严格 Clippy 与 Rustfmt 通过，前端 ESLint、类型检查与构建通过，18 个迁移冻结校验通过。存量迁移覆盖旧名称转换、转换后去重及自定义模型保留。首次扩大 Store 过滤范围时因测试 Redis 未启动、随后认证配置不匹配导致 10 项失败；修正专用测试实例配置后同一命令 13 项全过。上述全量结果属于此前功能验证，本次未重跑全量。
+
 ## 浏览器证据
 
-使用 Vite、实际 Vue 页面与本机 Chrome 无头浏览器，API 以合成数据拦截。验证动态代理保存后测试失败及再次测试成功、全局默认关闭、风险弹窗取消与确认、账户选择四个模型（目录勾选＋手动添加）、业务代理下拉排除动态代理、手动刷新等待与部分成功、再次刷新成功、缺失代理错误。没有页面脚本异常。
+使用 Vite、实际 Vue 页面与本机 Chrome 无头浏览器，API 以合成数据拦截。验证动态代理保存后测试失败及再次测试成功、全局默认关闭、风险弹窗取消与确认、账户选择四个模型（目录勾选＋手动添加）、业务代理下拉排除动态代理、手动刷新等待与部分成功、再次刷新成功、缺失代理错误。另验证默认模型完整 ID、目录重复项去重、已选模型不出现在可添加列表、取消后重新添加，以及手动输入已有模型不重复。没有页面脚本异常。
 
 四个模型仅为验收样例；产品支持每账号 1～32 个。检查桌面 1440×1100 浅色及 390×844 深色，窄屏无横向溢出。截图均为合成账号和无效示例地址：
 
 - [动态代理表单](verification/session-keepalive/dynamic-proxy-form.png)、[测试失败](verification/session-keepalive/dynamic-proxy-failed.png)、[代理列表](verification/session-keepalive/dynamic-proxy-list.png)
 - [风险确认](verification/session-keepalive/risk-confirmation.png)、[设置页](verification/session-keepalive/settings.png)
+- [可添加模型](verification/session-keepalive/account-available-models.png)、[窄屏模型选择](verification/session-keepalive/account-models-mobile-dark.png)
 - [账户模型](verification/session-keepalive/account-models.png)、[桌面刷新结果](verification/session-keepalive/partial-desktop.png)、[窄屏深色](verification/session-keepalive/partial-mobile-dark.png)
 
 这些结果不替代浏览器到真实后端、代理、上游的完整验收。

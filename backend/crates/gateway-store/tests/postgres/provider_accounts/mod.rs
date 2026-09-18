@@ -3517,6 +3517,15 @@ async fn session_keepalive_defaults_off_and_survives_unrelated_account_updates()
             .unwrap()
             .enable_session_keepalive()
     );
+    assert_eq!(
+        repository
+            .get_account(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .session_keepalive_models(),
+        ["gpt-5.6-sol", "gpt-6-astra"]
+    );
     let store = admin_account_store(&database.pool);
     let context = MutationContext {
         actor: MutationActor::System,
@@ -3565,6 +3574,57 @@ async fn session_keepalive_defaults_off_and_survives_unrelated_account_updates()
             summary[0].session_keepalive_models,
             vec!["model-a", "model-b", "model-c"]
         );
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn session_model_migration_corrects_legacy_ids_without_losing_custom_models() {
+    let Some(database) = TestDatabase::create("session_model_ids").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_legacy_models", "legacy models"))
+        .await
+        .unwrap();
+    repository
+        .insert_provider_account(account("acct_custom_models", "custom models"))
+        .await
+        .unwrap();
+    for (id, models) in [
+        (
+            "acct_legacy_models",
+            vec!["5.6 sol", "custom-model", "6", "gpt-6", "gpt-5.6-sol"],
+        ),
+        ("acct_custom_models", vec!["my-model", "another-model"]),
+    ] {
+        sqlx::query("update provider_accounts set session_keepalive_models = $2 where id = $1")
+            .bind(id)
+            .bind(models)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+    }
+    sqlx::raw_sql(include_str!(
+        "../../../../../migrations/0018_session_rewrite_model_ids.sql"
+    ))
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    for (id, expected) in [
+        (
+            "acct_legacy_models",
+            vec!["gpt-5.6-sol", "custom-model", "gpt-6-astra"],
+        ),
+        ("acct_custom_models", vec!["my-model", "another-model"]),
+    ] {
+        let account = repository
+            .get_account(&ProviderAccountId::new(id).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(account.session_keepalive_models(), expected);
     }
     database.close().await;
 }

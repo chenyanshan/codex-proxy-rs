@@ -113,7 +113,10 @@ impl MemoryAccountStore {
             .account
             .clone()
             .with_session_keepalive(enabled)
-            .with_session_keepalive_models(vec!["5.6 sol".to_owned(), "6".to_owned()]);
+            .with_session_keepalive_models(vec![
+                "gpt-5.6-sol".to_owned(),
+                "gpt-6-astra".to_owned(),
+            ]);
     }
 
     pub(crate) fn set_session_models(&self, id: &str, models: Vec<String>) {
