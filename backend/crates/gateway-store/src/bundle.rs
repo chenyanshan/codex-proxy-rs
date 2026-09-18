@@ -187,7 +187,11 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         cooldowns,
         runtime_policy,
         oauth_pending,
-    );
+    )
+    .with_session_tickets(Arc::new(redis::RedisSessionTicketRepository::new(
+        redis_connection.clone(),
+        REDIS_NAMESPACE,
+    )?));
     let worker_leader_lease = Arc::new(redis::worker_lease::RedisWorkerLeaderLeasePort::new(
         credential_leases,
     ));

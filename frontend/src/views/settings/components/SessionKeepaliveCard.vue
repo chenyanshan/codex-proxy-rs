@@ -36,15 +36,15 @@ function confirm() {
         </RouterLink> 保存一个动态代理并测试通过。业务出口保持不变。
       </p>
       <BaseForm class="sm:grid-cols-2">
-        <BaseFormItem label="探测并发数" description="每个模型从第一轮起同时发送的请求数，1～10">
+        <BaseFormItem label="探测并发数" description="前三轮每模型固定 1 个探针；第 4 轮起使用此并发数，1～10，默认 3">
           <BaseInput v-model="concurrency" aria-label="State 重写探测并发数" type="number" min="1" max="10" step="1" :disabled="disabled" />
         </BaseFormItem>
-        <BaseFormItem label="重试间隔（秒）" description="一轮全部失败后的等待时间，1～300 秒；限流时遵守上游等待要求">
+        <BaseFormItem label="重试间隔（秒）" description="前三轮固定等待 6 秒；第 4 轮起整轮结束后等待此间隔，1～300 秒，默认 6；限流时可延长">
           <BaseInput v-model="retryIntervalSeconds" aria-label="State 重写重试间隔（秒）" type="number" min="1" max="300" step="1" :disabled="disabled" />
         </BaseFormItem>
       </BaseForm>
       <p class="m-0 text-cp-sm text-cp-text-secondary">
-        保存后用于手动和后台刷新，下一轮重试读取新值。模型成功后立即停止；后台刷新周期仍为 53～55 分钟。
+        保存后用于手动和后台刷新，第 4 轮起读取配置值。有效 State 剩余不足 10 分钟时刷新，成功项跳过。重启后可恢复未过期 State；缺少有效 State 时暂停对应账号／模型的业务请求。
       </p>
       <p class="m-0 text-cp-sm text-cp-warning-text">
         此功能可能导致账户异常或上游限流，并产生模型调用消耗。确认后还需保存设置才会生效。

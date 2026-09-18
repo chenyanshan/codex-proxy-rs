@@ -17,6 +17,9 @@ use crate::policy::ClientApiKeyId;
 use crate::routing::UpstreamModelId;
 use crate::validation::{IdentifierError, validate_text};
 
+mod session_ticket;
+pub use session_ticket::{ProviderSessionTicket, ProviderSessionTicketPort};
+
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
 
 /// Provider 可据此决定是否重试，但看不到 SQL、Redis 或秘密原文。
@@ -937,7 +940,7 @@ impl Default for SessionRewritePolicy {
     fn default() -> Self {
         Self {
             concurrency: 3,
-            retry_interval_seconds: 2,
+            retry_interval_seconds: 6,
         }
     }
 }
@@ -1291,6 +1294,7 @@ pub struct ProviderStorePorts {
     cooldowns: Arc<dyn ProviderCooldownPort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     oauth_pending: Arc<dyn OAuthPendingFlowPort>,
+    session_tickets: Option<Arc<dyn ProviderSessionTicketPort>>,
 }
 
 impl ProviderStorePorts {
@@ -1321,7 +1325,19 @@ impl ProviderStorePorts {
             cooldowns,
             runtime_policy,
             oauth_pending,
+            session_tickets: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_session_tickets(mut self, tickets: Arc<dyn ProviderSessionTicketPort>) -> Self {
+        self.session_tickets = Some(tickets);
+        self
+    }
+
+    #[must_use]
+    pub fn session_tickets(&self) -> Option<Arc<dyn ProviderSessionTicketPort>> {
+        self.session_tickets.clone()
     }
 
     #[must_use]

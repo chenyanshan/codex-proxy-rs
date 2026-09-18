@@ -114,6 +114,7 @@ pub(crate) struct CodexCyberPolicyScope {
 }
 
 pub struct CodexCredentialSelector {
+    sessions: Option<Arc<crate::SessionManager>>,
     waiting: ConcurrencyWaitQueue<ProviderAccountId>,
     provider_kind: ProviderKind,
     repository: CodexCredentialRepository,
@@ -270,6 +271,7 @@ impl CodexCredentialSelector {
         cookie_policy: CodexCookiePolicy,
     ) -> Self {
         Self {
+            sessions: None,
             provider_kind,
             repository,
             leases,
@@ -281,6 +283,12 @@ impl CodexCredentialSelector {
             waiting: ConcurrencyWaitQueue::default(),
             account_feedback,
         }
+    }
+
+    #[must_use]
+    pub fn with_session_manager(mut self, sessions: Arc<crate::SessionManager>) -> Self {
+        self.sessions = Some(sessions);
+        self
     }
 
     pub async fn select(
@@ -393,6 +401,22 @@ impl CodexCredentialSelector {
                 .collect::<Vec<_>>();
             let mut eligible = Vec::with_capacity(accounts.len());
             for account in accounts {
+                if request.attempt.session_keepalive_enabled()
+                    && let Some(model) = upstream_model
+                    && account.enable_session_keepalive()
+                    && account.authentication_kind() == "oauth"
+                    && account
+                        .session_keepalive_models()
+                        .iter()
+                        .any(|selected| selected == model)
+                    && match &self.sessions {
+                        Some(sessions) => !sessions.available(&account, model).await,
+                        None => true,
+                    }
+                {
+                    continue;
+                }
+
                 if request.requires_websocket
                     && account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_API_KEY
                 {

@@ -523,10 +523,13 @@ impl Provider for CodexProvider {
         );
         if context.session_keepalive_enabled()
             && let Some(sessions) = &self.sessions
-        {
-            sessions
+            && !sessions
                 .rewrite(lease.account(), &mut upstream_request)
-                .await;
+                .await
+        {
+            return Err(map_selection_error(
+                CredentialSelectionError::NoEligibleCredential,
+            ));
         }
         // 每次执行从原始请求编码，选定出口后再覆盖，避免换号时携带上次位置。
         if let Some(location) = lease

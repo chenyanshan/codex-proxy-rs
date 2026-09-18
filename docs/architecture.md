@@ -197,7 +197,7 @@ Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参�
 
 ## 5. Provider 与协议边界
 
-OpenAI 的可选会话保活由私有 `session_manager` 模块持有进程内账号＋模型缓存。Provider Bundle 共享该服务给受 Host 监督的 Worker、Provider 管理端口和实际选号后的请求拦截；Core 只提供账号开关、模型选择、全局快照开关与运行策略端口。运维 Client 独立绑定代理目录中唯一且测试通过的动态代理，不得复用业务连接池；业务拦截只读缓存，原有 HTTP/WS 出口不变。配置默认关闭，协议偏离与缓存失效边界见 [会话保活设计](session-keepalive-design.md)。
+OpenAI 的可选 State 重写由私有 `session_manager` 持有探测生命周期，通过 Core 的 `ProviderSessionTicketPort` 在 Store 的 Redis 适配器中保存账号＋模型票据。Provider Bundle 共享该服务给受 Host 监督的 Worker、管理端口、选号器和发送前检查；Core 提供账号／全局开关、模型选择与运行策略合同。运维 Client 独立绑定测试通过的动态代理，强制 HTTP/1.1 并禁止连接复用；业务 HTTP/WS 出口不变。功能默认关闭，启用后受管理的账号／模型缺少有效票据时按 fail-closed 排除。协议准入、TTL 和恢复边界见 [State 重写设计](session-keepalive-design.md)。
 
 Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 canonical event，不读取 Provider SDK
 类型。Provider 独占 credential schema、OAuth、账号选择、模型目录、额度投影和上游 transport。

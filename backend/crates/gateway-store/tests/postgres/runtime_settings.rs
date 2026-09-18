@@ -553,7 +553,7 @@ async fn session_rewrite_settings_persist_and_drive_provider_policy() {
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let defaults = repository.load_session_rewrite_policy().await.unwrap();
     assert_eq!(defaults.concurrency(), 3);
-    assert_eq!(defaults.retry_interval_seconds(), 2);
+    assert_eq!(defaults.retry_interval_seconds(), 6);
     let mut update = settings_with_margin(3_600);
     update.session_rewrite_concurrency = Some(8);
     update.session_rewrite_retry_interval_seconds = Some(4);

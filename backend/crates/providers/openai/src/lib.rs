@@ -103,6 +103,7 @@ pub async fn initialize(
         Arc::clone(&runtime_policy),
         profile.clone(),
         config.base_url().to_owned(),
+        ports.session_tickets(),
     ));
     let websocket_pool = Arc::new(CodexWebSocketPool::with_config(
         config.websocket_pool_config(),
@@ -129,16 +130,19 @@ pub async fn initialize(
         http.clone(),
         config.base_url().to_owned(),
     ));
-    let selector = Arc::new(CodexCredentialSelector::new(
-        provider_kind.clone(),
-        repository.clone(),
-        Arc::clone(&leases),
-        session_affinity,
-        session_exclusions,
-        Arc::clone(&quota),
-        Arc::clone(&account_feedback),
-        CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
-    ));
+    let selector = Arc::new(
+        CodexCredentialSelector::new(
+            provider_kind.clone(),
+            repository.clone(),
+            Arc::clone(&leases),
+            session_affinity,
+            session_exclusions,
+            Arc::clone(&quota),
+            Arc::clone(&account_feedback),
+            CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
+        )
+        .with_session_manager(Arc::clone(&sessions)),
+    );
     let core_provider: Arc<dyn Provider> = Arc::new(
         CodexProvider::new(
             selector,

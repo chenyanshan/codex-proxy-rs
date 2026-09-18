@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn probe_logs_request_headers_response_fields_state_and_redacts_nested_secrets() {
+async fn probe_logs_headers_but_never_reads_response_body() {
     let logs = crate::support::capture_logs();
     let proxy = MockServer::start().await;
     let (_, _, manager) = fixture(Some(&proxy.uri())).await;
@@ -26,10 +26,7 @@ async fn probe_logs_request_headers_response_fields_state_and_redacts_nested_sec
     for field in [
         "diagnostic-state",
         "upstream-request-123",
-        "resp_diagnostic",
-        "total_tokens",
         "response_headers",
-        "response_body",
         "probe_id",
         "elapsedMs",
         "content-encoding",
@@ -45,6 +42,8 @@ async fn probe_logs_request_headers_response_fields_state_and_redacts_nested_sec
         assert!(!output.contains(secret), "leaked secret");
     }
     assert!(output.contains("[REDACTED]"));
+    assert!(!output.contains("resp_diagnostic"));
+    assert!(!output.contains("response_body"));
 }
 
 #[tokio::test]
@@ -86,7 +85,7 @@ async fn upstream_rejection_reports_status_and_probe_id_without_authentication()
     };
     for error in errors {
         assert!(error.contains("重写"));
-        assert!(error.contains("[REDACTED]"));
+        assert!(!error.contains("Rejected"));
         assert!(!error.contains("acct_a"));
     }
 }

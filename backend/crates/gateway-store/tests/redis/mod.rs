@@ -11,3 +11,5 @@ mod provider_circuit;
 mod provider_session_affinity;
 mod provider_session_exclusion;
 mod worker_lease;
+
+mod session_ticket;

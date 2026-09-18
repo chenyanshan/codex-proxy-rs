@@ -16,6 +16,7 @@ mod provider_circuit;
 mod provider_session_affinity;
 mod provider_session_exclusion;
 mod runtime_change;
+mod session_ticket;
 pub(crate) mod worker_lease;
 
 pub use admin_account_runtime::*;
@@ -32,6 +33,7 @@ pub use provider_circuit::*;
 pub use provider_session_affinity::*;
 pub use provider_session_exclusion::*;
 pub use runtime_change::*;
+pub use session_ticket::*;
 
 use crate::{StoreError, StoreResult, require_nonempty};
 
