@@ -789,6 +789,7 @@ where
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
                 .with_disable_fast(self.plan.disable_fast())
+                .with_session_keepalive_enabled(self.plan.session_keepalive_enabled())
                 .with_request_location(self.plan.request_location().cloned())
                 .with_concurrency_wait_budget(self.concurrency_wait_budget.clone())
                 .with_timing_started_at(self.observation.timing_started_at)

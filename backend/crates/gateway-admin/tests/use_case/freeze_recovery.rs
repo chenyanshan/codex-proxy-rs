@@ -25,6 +25,8 @@ use super::accounts::{FakeAccountStore, FakeProviderAdmin, account_record, event
 
 fn runtime_settings(enabled: bool, probe_enabled: bool, adaptive: bool) -> RuntimeSettings {
     RuntimeSettings {
+        oam_proxy: String::new(),
+        session_keepalive_enabled: false,
         disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),

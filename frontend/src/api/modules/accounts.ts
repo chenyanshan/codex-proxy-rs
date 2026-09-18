@@ -119,6 +119,8 @@ export interface AccountModelAccess {
 }
 
 export interface Account {
+  enableSessionKeepalive: boolean
+  sessionKeepaliveModels: string[]
   outboundProxyEndpoint: string | null
   id: string
   name: string
@@ -373,6 +375,8 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 }
 
 interface AccountUpdateParam {
+  enableSessionKeepalive?: boolean
+  sessionKeepaliveModels?: string[]
   outboundProxyUrl?: string
   outboundProxyId?: string
   accountId: string
@@ -658,5 +662,26 @@ export function updateAccountApiKey(data: { accountId: string, baseUrl: string, 
     url: '/api/admin/accounts/rotate',
     method: 'POST',
     data: { provider: 'openai', ...data },
+  })
+}
+
+export interface SessionStateRefresh {
+  accountId: string
+  models: {
+    model: string
+    refreshedAt: string | null
+    expireAt: number | null
+    error: string | null
+  }[]
+}
+
+export function refreshAccountSessionState(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<SessionStateRefresh>({
+    url: '/api/admin/accounts/session-state/refresh',
+    method: 'POST',
+    data,
+    // 最多 32 个模型，每个模型 3 次 30 秒请求与 2 次至多 30 秒退避。
+    timeout: 4_830_000,
+    ...options,
   })
 }

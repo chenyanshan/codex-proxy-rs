@@ -15,8 +15,10 @@ pub type ModelMappings = BTreeMap<PublicModelId, UpstreamModelId>;
 pub use gateway_core::account::RotationStrategy;
 
 /// 完整运行设置事实。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
+    pub oam_proxy: String,
+    pub session_keepalive_enabled: bool,
     pub disable_fast: bool,
     pub config_revision: Revision,
     pub request_location_enabled: bool,
@@ -47,8 +49,11 @@ pub struct RuntimeSettings {
 }
 
 /// 原子替换运行设置的命令。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
+    pub oam_proxy: Option<String>,
+    pub session_keepalive_enabled: Option<bool>,
+    pub session_keepalive_risk_confirmed: bool,
     pub disable_fast: Option<bool>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -124,5 +129,23 @@ impl fmt::Debug for RegeneratedAdminApiKey {
             .field("mutation", &self.mutation)
             .field("key", &"[REDACTED]")
             .finish()
+    }
+}
+
+impl fmt::Debug for RuntimeSettings {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeSettings")
+            .field("oam_proxy", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for ReplaceRuntimeSettings {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReplaceRuntimeSettings")
+            .field("oam_proxy", &"[REDACTED]")
+            .finish_non_exhaustive()
     }
 }

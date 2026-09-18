@@ -6,11 +6,13 @@ import type { AccountGroup, AccountModelAccess } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountApiKeyFields from './AccountApiKeyFields.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
+import AccountSessionModelsField from './AccountSessionModelsField.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
 defineProps<{
@@ -30,6 +32,8 @@ const open = defineModel<boolean>({ required: true })
 const apiKey = defineModel<ApiKeyAccountForm>('apiKey', { required: true })
 const notes = defineModel<string>('notes', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
+const sessionKeepaliveModels = defineModel<string[]>('sessionKeepaliveModels', { required: true })
+const enableSessionKeepalive = defineModel<boolean>('enableSessionKeepalive', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -90,6 +94,16 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
       />
+
+      <div v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'" class="flex items-center justify-between gap-3">
+        <div class="grid gap-1">
+          <span class="text-cp font-medium text-cp-text-secondary">会话保活</span>
+          <span class="text-cp-sm text-cp-text-tertiary">自动使用全局动态代理，逐个模型发送 hi；须先在设置页开启全局开关。</span>
+        </div>
+        <BaseSwitch v-model="enableSessionKeepalive" label="切换账号会话保活" :disabled="saving" />
+      </div>
+
+      <AccountSessionModelsField v-if="enableSessionKeepalive && account.provider === 'openai' && account.authenticationKind === 'oauth'" v-model="sessionKeepaliveModels" :account-id="account.id" :disabled="saving" />
 
       <BaseFormItem label="备注">
         <BaseTextarea

@@ -364,7 +364,7 @@ Token 明细、费用明细、用时/首字与状态。Token 和费用复用现�
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 管理员显式清除该账号的本地错误/额度/cooldown 事实并重新启用，不访问上游 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 更新指定 OpenAI 账号的 OAuth token 或 API Key 上游设置 |
-| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl? }` | 一次更新账号备注、调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
+| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl?, enableSessionKeepalive?, sessionKeepaliveModels? }` | 一次更新账号备注、调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
 | `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled?, concurrencyLimit?, weight?, groupIds?, modelAccess?, outboundProxyId?, outboundProxyUrl? }` | 一次事务更新所选账号；仅修改提供的字段，至少提供一项修改 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
@@ -445,13 +445,15 @@ Images、独立 Search 及管理员连接测试不受该文本模型限制；连
 | `GET` | `/api/admin/proxies` | `page`、`pageSize`（1-200）、`search`（名称） | `{ items, page }` |
 | `GET` | `/api/admin/proxies/accounts` | `proxyId`、`page`、`pageSize`（1-200）、`search`（账号名称或邮箱） | `{ items, page }` |
 | `POST` | `/api/admin/proxies/accounts/remove` | `{ proxyId, accountId }` | `{ configRevision }` |
-| `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl, location? }` | `201 { record, configRevision }` |
-| `POST` | `/api/admin/proxies/update` | `{ id, revision, name, proxyUrl?, location? }` | `{ record, configRevision }` |
+| `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl, location?, isDynamic? }` | `201 { record, configRevision }` |
+| `POST` | `/api/admin/proxies/update` | `{ id, revision, name, proxyUrl?, location?, isDynamic? }` | `{ record, configRevision }` |
 | `POST` | `/api/admin/proxies/test` | `{ id, revision }` | 最新代理记录 / Proxy record with test result |
 | `POST` | `/api/admin/proxies/delete` | `{ id, revision }` | `{ configRevision }` |
 
-`record` 包含 `id`、`name`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、`location`、
+`record` 包含 `id`、`name`、`isDynamic`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、`location`、
 `lastTestAt`、`lastTest: { success, latencyMs, exitIp, exitIpv4, exitIpv6, message }`、`createdAt`、`updatedAt`。
+`isDynamic` 默认为 false，创建时可设为 true，更新时省略保留。全局最多一个动态代理；已绑定业务账号的代理不能转换，动态代理不能通过账号 ID 绑定、URL 写入或导入绑定成为业务出口。只有测试通过的动态代理可用于 State 重写；修改地址会清除测试结果，须重新调用保存代理的 `/test`。未保存地址的 `/probe` 不授予重写准入。
+
 未测试时 `lastTestAt` / `lastTest` 为 `null`。连通性失败返回 HTTP 200 和 `lastTest.success=false`；
 记录版本过期、重复 URL、删除已绑定的代理返回 409，并发测试满载返回 429。
 
@@ -925,7 +927,35 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 自动结算按网关请求 ID 幂等执行。账本独立于使用统计日志，记录保留至删除 Key，
 不受 `usageRetentionDays` 影响。
 
+### 会话 State 刷新
+
+账号列表返回 `enableSessionKeepalive`，默认 `false`。`POST /api/admin/accounts/update` 可携带该布尔值；省略或 `null` 保留原值。有效范围为 OpenAI OAuth 账号；开启不要求先判断业务故障原因。账号列表还返回 `sessionKeepaliveModels`，默认 `["gpt-5.6-sol", "gpt-6-astra"]`；账号更新可提交 1～32 个唯一的上游模型 ID，每个 1～128 字节且无首尾空白或控制字符，省略或 null 保留。其他必需更新字段仍按原接口提交。
+
+`POST /api/admin/accounts/session-state/refresh` 使用管理员鉴权，JSON 请求为 `{ "accountId": "acct_..." }`，拒绝未知字段。账号必须启用、保活开启且 OAuth 凭据可用，另须开启全局 `sessionKeepaliveEnabled` 并存在测试通过的动态代理。一次刷新该账号 `sessionKeepaliveModels` 中的所有精确模型，遵守账号模型权限，不接受客户端 Token、代理或 State。
+
+返回标准管理响应信封，`data` 示例：
+
+```json
+{
+  "accountId": "acct_example",
+  "models": [
+    { "model": "gpt-5.6-sol", "refreshedAt": "2026-09-18T02:00:00Z", "expireAt": 1789700400, "error": null },
+    { "model": "gpt-6-astra", "refreshedAt": null, "expireAt": null, "error": "上游拒绝重写请求" }
+  ]
+}
+```
+
+`refreshedAt` 为 UTC 时间，`expireAt` 为 Unix 秒。成功项本地 TTL 为 3600 秒；失败项不延长旧 State 的 TTL。HTTP 200 表示已完成本次逐模型处理，调用方必须检查各项 `error`，可全部失败。前置条件错误为 400，JSON 字段类型或未知字段错误为 422，不存在为 404，同账号刷新中或全局重写并发已满为 409，依赖不可用为 503，未授权为 401。响应不包含 State 原文，并带 `Cache-Control: no-store`。
+
+每个模型通过动态代理发送 `hi`，失败最多尝试 3 次，退避间隔 1 秒、2 秒加抖动。429 尊重 `Retry-After`；等待超过 30 秒则本轮停止并显示等待时间，不提前重试。错误包括 HTTP 状态与可关联日志的重写 ID。
+
+手动刷新不改变后台周期；后台每轮结束随机等待 3000–3480 秒。运维和业务分别使用独立 Client 与各自代理，业务仍走原账号出口。该实验性跨轮次覆盖与已核验官方 State 合同的偏离、模型名限制及停止方式见 [设计说明](session-keepalive-design.md)。
+
 ## 8. 运行设置
+
+`sessionKeepaliveEnabled` 默认 false，更新省略或 null 保留；提交 true 时必须同时提交 `sessionKeepaliveRiskConfirmed: true`，且代理管理中存在测试通过的唯一动态代理，否则拒绝。确认字段仅用于本次操作，不持久化也不返回。关闭全局开关停止新请求的 State 覆盖及后续重写；账号选择保留。
+
+重写出口在代理管理中以 `isDynamic` 配置。旧 `oamProxy` 保留兼容读取但不再生效，更新仅接受空值或省略，非空更新返回错误，引导使用代理管理。迁移与模型精确匹配要求见 [设计说明](session-keepalive-design.md)。
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -939,6 +969,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 设置更新字段包括：
 
 ```text
+sessionKeepaliveEnabled
+sessionKeepaliveRiskConfirmed
 disableFast
 requestLocationEnabled
 requestLocation

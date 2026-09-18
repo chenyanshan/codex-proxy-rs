@@ -25,6 +25,7 @@ import AccountOverviewCards from './components/AccountOverviewCards.vue'
 import AccountPlanBadge from './components/AccountPlanBadge.vue'
 import AccountQuotaPanel from './components/AccountQuotaPanel/index.vue'
 import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell/index.vue'
+import AccountSessionStateModal from './components/AccountSessionStateModal.vue'
 import AccountStatusBadge from './components/AccountStatusBadge/index.vue'
 import AccountTableActions from './components/AccountTableActions.vue'
 import AccountUsagePanel from './components/AccountUsagePanel.vue'
@@ -33,6 +34,7 @@ import { useAccountConnectionTest } from './composables/useAccountConnectionTest
 import { useAccountEditor } from './composables/useAccountEditor'
 import { useAccountImportTasks } from './composables/useAccountImportTasks'
 import { useAccountMutations } from './composables/useAccountMutations'
+import { useAccountSessionState } from './composables/useAccountSessionState'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
 import { accountColumns, derivedAccountStatus } from './constants'
@@ -172,6 +174,8 @@ const {
   editingAccount,
   notes: editingNotes,
   schedulingEnabled,
+  enableSessionKeepalive,
+  sessionKeepaliveModels,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   modelAccess: editingModelAccess,
@@ -186,6 +190,7 @@ const {
   reloadAccounts: loadAccounts,
   reloadGroups: loadGroups,
 })
+const { account: stateAccount, open: stateModalOpen, result: stateResult, loading: stateRefreshing, error: stateError, refresh: refreshState } = useAccountSessionState()
 </script>
 
 <template>
@@ -321,7 +326,9 @@ const {
                 :deleting="deletingAccount"
                 :recovering="recoveringAccountIds.has(row.id)"
                 :refreshing="refreshingAccountIds.has(row.id)"
+                :refreshing-state="stateRefreshing && stateAccount?.id === row.id"
                 :testing="testingConnectionIds.has(row.id)"
+                @refresh-state="refreshState"
                 @edit="openAccountEdit"
                 @delete="requestDeleteAccount"
                 @recover="handleRecover"
@@ -402,11 +409,15 @@ const {
       @generate-oauth="handleAuthorizeOAuth"
     />
 
+    <AccountSessionStateModal v-model="stateModalOpen" :account="stateAccount" :result="stateResult" :loading="stateRefreshing" :error="stateError" @retry="refreshState" />
+
     <AccountEditModal
       v-model="showEditModal"
       v-model:api-key="editingApiKey"
       v-model:notes="editingNotes"
       v-model:enabled="schedulingEnabled"
+      v-model:enable-session-keepalive="enableSessionKeepalive"
+      v-model:session-keepalive-models="sessionKeepaliveModels"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"

@@ -4,7 +4,8 @@ use std::io;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
-use gateway_core::operation::GenerateRequest;
+use gateway_core::error::OperationError;
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_protocol::openai::{
     WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, is_transport_managed_request_header,
 };
@@ -764,4 +765,30 @@ fn context_string(context: &Map<String, Value>, field: &str) -> Option<String> {
         .get(field)
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
+}
+
+/// 账户连接测试与 State 重写共用轻量模型调用，保持输入协议一致。
+pub(crate) fn build_connection_test_operation(
+    upstream_model: &gateway_core::routing::UpstreamModelId,
+    input_text: &str,
+) -> Result<Operation, OperationError> {
+    let mut body = Map::new();
+    body.insert(
+        "model".to_owned(),
+        Value::String(upstream_model.as_str().to_owned()),
+    );
+    body.insert(
+        "input".to_owned(),
+        serde_json::json!([{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": input_text}]
+        }]),
+    );
+    body.insert("stream".to_owned(), Value::Bool(true));
+    body.insert("store".to_owned(), Value::Bool(false));
+    let payload = ProtocolPayload::json_object("openai", body)?;
+    Ok(Operation::Generate(GenerateRequest::from_protocol_payload(
+        payload,
+    )))
 }

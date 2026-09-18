@@ -10,6 +10,7 @@ defineProps<{
   account: AccountRow
   deleting: boolean
   recovering: boolean
+  refreshingState: boolean
   refreshing: boolean
   testing: boolean
 }>()
@@ -20,6 +21,7 @@ const emit = defineEmits<{
   recover: [accountId: string]
   test: [account: AccountRow]
   refresh: [accountId: string]
+  refreshState: [account: AccountRow]
   reauthorize: [account: AccountRow]
 }>()
 </script>
@@ -63,6 +65,18 @@ const emit = defineEmits<{
               <Wifi class="size-3.5 text-cp-text-quaternary" />
             </template>
             测试连接
+          </BaseMenuItem>
+          <BaseMenuItem
+            v-if="account.provider === 'openai' && account.authenticationKind === 'oauth' && account.enableSessionKeepalive"
+            :loading="refreshingState"
+            :disabled="refreshingState || !account.enabled"
+            :title="!account.enabled ? '请先启用账号调度' : undefined"
+            @click.stop="(close(), emit('refreshState', account))"
+          >
+            <template #icon>
+              <RefreshCw class="size-3.5 text-cp-text-quaternary" />
+            </template>
+            刷新 State
           </BaseMenuItem>
           <BaseMenuItem
             v-if="account.authenticationKind === 'oauth'"

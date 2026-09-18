@@ -37,7 +37,9 @@ async fn response_json(response: axum::response::Response) -> Value {
 
 fn update_body() -> Value {
     json!({
-        "disableFast": false,
+        "oamProxy": "",
+        "sessionKeepaliveEnabled": false,
+            "disableFast": false,
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
         "modelMappings": {
@@ -103,6 +105,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
     let settings = RuntimeSettings {
+        oam_proxy: String::new(),
+        session_keepalive_enabled: false,
         disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),
@@ -148,6 +152,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     assert_eq!(
         value,
         json!({
+            "oamProxy": "",
+        "sessionKeepaliveEnabled": false,
             "disableFast": false,
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
@@ -202,6 +208,8 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         .cloned()
         .collect();
     let settings = RuntimeSettings {
+        oam_proxy: String::new(),
+        session_keepalive_enabled: false,
         disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),
@@ -637,4 +645,18 @@ async fn disable_fast_settings_updates_preserve_omitted_values() {
             expected
         );
     }
+}
+
+#[test]
+fn oam_proxy_omission_and_explicit_empty_remain_distinct_and_debug_is_redacted() {
+    let mut body = update_body();
+    body.as_object_mut().unwrap().remove("oamProxy");
+    let omitted: UpdateRuntimeSettingsRequest = serde_json::from_value(body.clone()).unwrap();
+    assert!(omitted.oam_proxy.is_none());
+    body["oamProxy"] = json!("");
+    let cleared: UpdateRuntimeSettingsRequest = serde_json::from_value(body.clone()).unwrap();
+    assert_eq!(cleared.oam_proxy.as_deref(), Some(""));
+    body["oamProxy"] = json!("http://test-user:test-secret@proxy.invalid:8181");
+    let configured: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+    assert!(!format!("{configured:?}").contains("test-secret"));
 }

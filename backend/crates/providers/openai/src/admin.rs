@@ -36,7 +36,7 @@ use gateway_core::account::{
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::metering::Money;
-use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
+use gateway_core::operation::Operation;
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
     OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome, ProviderStoreError,
@@ -73,6 +73,7 @@ const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 3;
 
 /// OpenAI 对终态 Admin port 的唯一实现。
 pub(crate) struct OpenAiAdminProvider {
+    sessions: Arc<crate::SessionManager>,
     provider_kind: ProviderKind,
     profile: CodexWireProfileState,
     accounts: Arc<dyn ProviderAccountStore>,
@@ -86,6 +87,7 @@ pub(crate) struct OpenAiAdminProvider {
 }
 
 pub(crate) struct OpenAiAdminServices {
+    pub(crate) sessions: Arc<crate::SessionManager>,
     pub(crate) credentials: Arc<CodexCredentialAdminService>,
     pub(crate) oauth: Arc<dyn CodexOAuthAdmin>,
     pub(crate) profile_statistics: Arc<CodexCredentialProfileService>,
@@ -107,6 +109,7 @@ impl OpenAiAdminProvider {
             provider_kind,
             profile,
             accounts,
+            sessions: services.sessions,
             credentials: services.credentials,
             oauth: services.oauth,
             profile_statistics: services.profile_statistics,
@@ -163,6 +166,13 @@ impl OpenAiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for OpenAiAdminProvider {
+    async fn refresh_session_state(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<gateway_admin::model::accounts::SessionStateRefresh, ProviderAdminError> {
+        self.sessions.refresh(account_id).await
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.provider_kind
     }
@@ -192,12 +202,16 @@ impl ProviderAdmin for OpenAiAdminProvider {
     }
 
     async fn account_unavailable(&self, account_id: &ProviderAccountId) {
+        self.sessions.invalidate(account_id).await;
         self.websocket_pool.evict_account(account_id.as_str()).await;
     }
 
     async fn account_facts_changed(&self, account_ids: &[ProviderAccountId]) {
         if account_ids.is_empty() {
             return;
+        }
+        for id in account_ids {
+            self.sessions.invalidate(id).await;
         }
         self.quota.invalidate_scheduling(account_ids);
         if let Err(error) = self.catalog.invalidate() {
@@ -214,7 +228,8 @@ impl ProviderAdmin for OpenAiAdminProvider {
         upstream_model: &UpstreamModelId,
         input_text: &str,
     ) -> Result<Operation, ProviderAdminError> {
-        build_connection_test_operation(upstream_model, input_text)
+        crate::transport::request::build_connection_test_operation(upstream_model, input_text)
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))
     }
 
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile> {
@@ -372,13 +387,12 @@ impl ProviderAdmin for OpenAiAdminProvider {
             (
                 AuthorizationMutationTarget::Create { .. },
                 CompletedCodexOAuthCredential::Create(credential),
-            ) => {
-                prepared_create(credential, Utc::now()).map(PreparedAuthorizationCredential::Create)
-            }
+            ) => prepared_create(*credential, Utc::now())
+                .map(PreparedAuthorizationCredential::Create),
             (
                 AuthorizationMutationTarget::Reauthorize { .. },
                 CompletedCodexOAuthCredential::Reauthorize(credential),
-            ) => prepared_rotation(credential, mutation.provider_kind().clone())
+            ) => prepared_rotation(*credential, mutation.provider_kind().clone())
                 .map(PreparedAuthorizationCredential::Reauthorize),
             _ => Err(provider_admin_error(ProviderAdminErrorKind::Internal)),
         };
@@ -1391,32 +1405,6 @@ fn binding(value: &str) -> Result<OAuthPendingBinding, CodexOAuthPendingStoreErr
 
 fn provider_admin_error(kind: ProviderAdminErrorKind) -> ProviderAdminError {
     ProviderAdminError::new(kind)
-}
-
-fn build_connection_test_operation(
-    upstream_model: &UpstreamModelId,
-    input_text: &str,
-) -> Result<Operation, ProviderAdminError> {
-    let mut body = Map::new();
-    body.insert(
-        "model".to_owned(),
-        Value::String(upstream_model.as_str().to_owned()),
-    );
-    body.insert(
-        "input".to_owned(),
-        serde_json::json!([{
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": input_text}]
-        }]),
-    );
-    body.insert("stream".to_owned(), Value::Bool(true));
-    body.insert("store".to_owned(), Value::Bool(false));
-    let payload = ProtocolPayload::json_object("openai", body)
-        .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-    Ok(Operation::Generate(GenerateRequest::from_protocol_payload(
-        payload,
-    )))
 }
 
 fn currency_cost(money: Money) -> Result<CurrencyCost, ProviderAdminError> {

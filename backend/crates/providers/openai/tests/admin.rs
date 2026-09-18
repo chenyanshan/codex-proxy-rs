@@ -74,7 +74,7 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.core_provider().name(), "openai");
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
-    assert_eq!(contributions.len(), 5);
+    assert_eq!(contributions.len(), 6);
     assert!(
         contributions
             .iter()
@@ -1354,6 +1354,8 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        enable_session_keepalive: false,
+        session_keepalive_models: vec!["5.6 sol".into(), "6".into()],
         notes: None,
         model_access: Default::default(),
         outbound_proxy: None,

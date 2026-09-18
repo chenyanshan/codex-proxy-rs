@@ -402,6 +402,12 @@ impl SettingsStore for MemorySettingsStore {
     ) -> AdminStoreResult<RuntimeSettings> {
         let mut settings = self.settings.lock().expect("settings");
         let updated = RuntimeSettings {
+            session_keepalive_enabled: command
+                .session_keepalive_enabled
+                .unwrap_or(settings.session_keepalive_enabled),
+            oam_proxy: command
+                .oam_proxy
+                .unwrap_or_else(|| settings.oam_proxy.clone()),
             disable_fast: command.disable_fast.unwrap_or(settings.disable_fast),
             request_location_enabled: command.request_location_enabled,
             request_location: command.request_location,
@@ -1278,6 +1284,8 @@ fn test_runtime_settings() -> RuntimeSettings {
         ),
     ]);
     RuntimeSettings {
+        oam_proxy: String::new(),
+        session_keepalive_enabled: false,
         disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),

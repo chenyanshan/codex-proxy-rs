@@ -1175,6 +1175,8 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let result = store
         .update_account(
             UpdateAccount {
+                enable_session_keepalive: None,
+                session_keepalive_models: None,
                 notes: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -1256,6 +1258,8 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         request_id: "proxy-edit".to_owned(),
     };
     let command = UpdateAccount {
+        enable_session_keepalive: None,
+        session_keepalive_models: None,
         notes: None,
         model_access: Default::default(),
         account_id: "acct_proxy".to_owned(),
@@ -1279,6 +1283,8 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
+                enable_session_keepalive: None,
+                session_keepalive_models: None,
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Url(
                     gateway_core::account::OutboundProxy::parse(
                         "socks5h://next:new-secret@127.0.0.1:1080",
@@ -1295,6 +1301,8 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
+                enable_session_keepalive: None,
+                session_keepalive_models: None,
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Direct),
                 ..command
             },
@@ -1328,6 +1336,8 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
         request_id: "notes-edit".to_owned(),
     };
     let command = UpdateAccount {
+        enable_session_keepalive: None,
+        session_keepalive_models: None,
         account_id: "acct_notes".to_owned(),
         notes: Some("  团队备用\n下月续费  ".to_owned()),
         enabled: true,
@@ -1359,6 +1369,8 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
     store
         .update_account(
             UpdateAccount {
+                enable_session_keepalive: None,
+                session_keepalive_models: None,
                 notes: None,
                 ..command.clone()
             },
@@ -1434,6 +1446,8 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
     store
         .update_account(
             UpdateAccount {
+                enable_session_keepalive: None,
+                session_keepalive_models: None,
                 notes: Some(" \n\t ".to_owned()),
                 ..command
             },
@@ -1477,6 +1491,8 @@ async fn invalid_account_notes_roll_back_scheduling_revision_and_audit() {
     let result = admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                enable_session_keepalive: None,
+                session_keepalive_models: None,
                 account_id: "acct_notes".to_owned(),
                 notes: Some("备".repeat(501)),
                 enabled: false,
@@ -1993,6 +2009,7 @@ async fn authorization_import_rejects_a_saved_proxy_changed_during_oauth() {
     let saved = proxies
         .create(
             NewProxy {
+                is_dynamic: false,
                 location: None,
                 name: "OAuth".to_owned(),
                 proxy: original.clone(),
@@ -2018,6 +2035,7 @@ async fn authorization_import_rejects_a_saved_proxy_changed_during_oauth() {
     let edited = proxies
         .update(
             UpdateProxy {
+                is_dynamic: None,
                 location: None,
                 id: saved.id.clone(),
                 revision: saved.revision,
@@ -2434,6 +2452,8 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            enable_session_keepalive: None,
+            session_keepalive_models: None,
             notes: None,
             model_access: Default::default(),
             outbound_proxy: None,
@@ -2502,6 +2522,8 @@ async fn credential_rotation_and_settings_share_one_transaction() {
     .await
     .expect("seed group");
     let settings = UpdateAccount {
+        enable_session_keepalive: None,
+        session_keepalive_models: None,
         account_id: ACCOUNT_ID.to_owned(),
         notes: Some("统一保存".to_owned()),
         enabled: false,
@@ -2562,6 +2584,8 @@ async fn credential_rotation_and_settings_share_one_transaction() {
             "missing_proxy",
             2,
             UpdateAccount {
+                enable_session_keepalive: None,
+                session_keepalive_models: None,
                 outbound_proxy: Some(AccountProxySelection::Saved("missing_proxy".to_owned())),
                 ..settings.clone()
             },
@@ -3139,6 +3163,8 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
     admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                enable_session_keepalive: None,
+                session_keepalive_models: None,
                 notes: None,
                 model_access: Default::default(),
                 account_id: id.as_str().to_owned(),
@@ -3469,5 +3495,136 @@ async fn adaptive_concurrency_uses_latest_locked_settings_without_overwriting_ad
     .await
     .expect("audit");
     assert_eq!(audited_fields, vec![vec!["concurrency_limit".to_owned()]]);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn session_keepalive_defaults_off_and_survives_unrelated_account_updates() {
+    let Some(database) = TestDatabase::create("session_keepalive").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_keepalive", "user-keepalive"))
+        .await
+        .expect("insert account");
+    let id = ProviderAccountId::new("acct_keepalive").unwrap();
+    assert!(
+        !repository
+            .get_account(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .enable_session_keepalive()
+    );
+    assert_eq!(
+        repository
+            .get_account(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .session_keepalive_models(),
+        ["gpt-5.6-sol", "gpt-6-astra"]
+    );
+    let store = admin_account_store(&database.pool);
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "test-keepalive".to_owned(),
+    };
+    for (flag, expected) in [(Some(true), true), (None, true), (Some(false), false)] {
+        store
+            .update_account(
+                UpdateAccount {
+                    enable_session_keepalive: flag,
+                    session_keepalive_models: flag.filter(|flag| *flag).map(|_| {
+                        vec![
+                            "model-a".to_owned(),
+                            "model-b".to_owned(),
+                            "model-c".to_owned(),
+                        ]
+                    }),
+                    account_id: id.as_str().to_owned(),
+                    notes: None,
+                    enabled: true,
+                    concurrency_limit: None,
+                    weight: gateway_core::account::AccountWeight::DEFAULT,
+                    model_access: None,
+                    outbound_proxy: None,
+                    group_ids: Vec::new(),
+                },
+                &context,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            repository
+                .get_account(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .enable_session_keepalive(),
+            expected
+        );
+        let summary = repository
+            .list_provider_accounts(Some("openai"), true)
+            .await
+            .unwrap();
+        assert_eq!(summary[0].enable_session_keepalive, expected);
+        assert_eq!(
+            summary[0].session_keepalive_models,
+            vec!["model-a", "model-b", "model-c"]
+        );
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn session_model_migration_corrects_legacy_ids_without_losing_custom_models() {
+    let Some(database) = TestDatabase::create("session_model_ids").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_legacy_models", "legacy models"))
+        .await
+        .unwrap();
+    repository
+        .insert_provider_account(account("acct_custom_models", "custom models"))
+        .await
+        .unwrap();
+    for (id, models) in [
+        (
+            "acct_legacy_models",
+            vec!["5.6 sol", "custom-model", "6", "gpt-6", "gpt-5.6-sol"],
+        ),
+        ("acct_custom_models", vec!["my-model", "another-model"]),
+    ] {
+        sqlx::query("update provider_accounts set session_keepalive_models = $2 where id = $1")
+            .bind(id)
+            .bind(models)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+    }
+    sqlx::raw_sql(include_str!(
+        "../../../../../migrations/0018_session_rewrite_model_ids.sql"
+    ))
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    for (id, expected) in [
+        (
+            "acct_legacy_models",
+            vec!["gpt-5.6-sol", "custom-model", "gpt-6-astra"],
+        ),
+        ("acct_custom_models", vec!["my-model", "another-model"]),
+    ] {
+        let account = repository
+            .get_account(&ProviderAccountId::new(id).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(account.session_keepalive_models(), expected);
+    }
     database.close().await;
 }

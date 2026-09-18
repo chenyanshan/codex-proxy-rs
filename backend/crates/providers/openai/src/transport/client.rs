@@ -775,7 +775,7 @@ impl WebSocketPoolLogContext {
     }
 }
 
-pub(super) fn retry_after_seconds(headers: &HeaderMap, body: Option<&str>) -> Option<u64> {
+pub(crate) fn retry_after_seconds(headers: &HeaderMap, body: Option<&str>) -> Option<u64> {
     headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())

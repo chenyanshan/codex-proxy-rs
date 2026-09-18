@@ -40,6 +40,7 @@ const columns = defineTableColumns<OutboundProxyRecord>([
 const showForm = shallowRef(false)
 const editing = shallowRef<OutboundProxyRecord | null>(null)
 const form = reactive({
+  isDynamic: false,
   name: '',
   proxyUrl: '',
   customLocation: false,
@@ -59,6 +60,7 @@ const inspected = shallowRef<OutboundProxyRecord | null>(null)
 
 function openForm(proxy: OutboundProxyRecord | null = null) {
   editing.value = proxy
+  form.isDynamic = proxy?.isDynamic ?? false
   form.name = proxy?.name ?? ''
   form.proxyUrl = ''
   form.customLocation = proxy?.location != null
@@ -125,22 +127,32 @@ async function save() {
   }
   await saveAction.run(async () => {
     // 编辑时留空保留已保存的地址和认证，不能用脱敏地址覆盖原连接。
-    await (editing.value
+    const result = await (editing.value
       ? updateProxy({
           id: editing.value.id,
           revision: editing.value.revision,
           name,
+          isDynamic: form.isDynamic,
           proxyUrl: proxyUrl || undefined,
           location,
         })
       : createProxy({
           name,
+          isDynamic: form.isDynamic,
           proxyUrl,
           location,
         }))
     showForm.value = false
     form.proxyUrl = ''
-    toast.success('代理已保存')
+    if (result.record.isDynamic && !result.record.lastTest?.success) {
+      const tested = await testProxy({ id: result.record.id, revision: result.record.revision })
+      if (tested.lastTest?.success)
+        toast.success('动态代理已保存并测试通过')
+      else toast.warning('代理已保存，但测试未通过，暂不能用于重写')
+    }
+    else {
+      toast.success('代理已保存')
+    }
     search.value = ''
     query.page.value = 1
     await query.execute()
@@ -213,6 +225,7 @@ onMounted(() => void query.execute())
           <BaseTable class="min-h-0 flex-1" :columns="columns" :rows="proxies" :loading="loading" :empty-text="search.trim() ? '没有找到匹配的代理，请尝试其他名称' : '暂无代理，请点击新增代理添加'">
             <template #name="{ row }">
               <strong class="block truncate text-cp text-cp-text" :title="row.name">{{ row.name }}</strong>
+              <span v-if="row.isDynamic" class="text-cp-xs text-cp-primary-text">动态代理 · State 重写专用</span>
             </template>
             <template #address="{ row }">
               <div class="grid min-w-0 gap-1">
@@ -282,6 +295,7 @@ onMounted(() => void query.execute())
 
     <ProxyFormModal
       v-model="showForm"
+      v-model:is-dynamic="form.isDynamic"
       v-model:name="form.name"
       v-model:proxy-url="form.proxyUrl"
       v-model:custom-location="form.customLocation"

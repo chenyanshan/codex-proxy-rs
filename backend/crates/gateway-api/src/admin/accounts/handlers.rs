@@ -45,6 +45,10 @@ where
             "/api/admin/accounts/quota/refresh",
             post(refresh_account_quota::<S>),
         )
+        .route(
+            "/api/admin/accounts/session-state/refresh",
+            post(refresh_account_session_state::<S>),
+        )
         .route("/api/admin/accounts/models", get(account_models::<S>))
         .route(
             "/api/admin/accounts/models/refresh",
@@ -605,4 +609,35 @@ where
             Ok(Event::default().data(data))
         });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+async fn refresh_account_session_state<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<AccountActionRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let account_id = request.into_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .refresh_session_state(&account_id)
+        .await
+        .map_err(map_service_error)?;
+    let models = result
+        .models
+        .into_iter()
+        .map(|item| {
+            serde_json::json!({
+                "model": item.model, "refreshedAt": item.refreshed_at,
+                "expireAt": item.expire_at, "error": item.error,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({"accountId": result.account_id, "models": models})),
+    ))
 }

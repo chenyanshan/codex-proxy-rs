@@ -105,6 +105,27 @@ impl MemoryAccountStore {
         .expect("seed API account");
     }
 
+    pub(crate) fn set_session_keepalive(&self, id: &str, enabled: bool) {
+        let id = ProviderAccountId::new(id).expect("account ID");
+        let mut accounts = self.accounts.lock().expect("account store lock");
+        let stored = accounts.get_mut(&id).expect("seeded account");
+        stored.account = stored
+            .account
+            .clone()
+            .with_session_keepalive(enabled)
+            .with_session_keepalive_models(vec![
+                "gpt-5.6-sol".to_owned(),
+                "gpt-6-astra".to_owned(),
+            ]);
+    }
+
+    pub(crate) fn set_session_models(&self, id: &str, models: Vec<String>) {
+        let id = ProviderAccountId::new(id).unwrap();
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts.get_mut(&id).unwrap();
+        stored.account = stored.account.clone().with_session_keepalive_models(models);
+    }
+
     pub(crate) fn account(&self, id: &str) -> Option<ProviderAccount> {
         let id = ProviderAccountId::new(id).ok()?;
         self.accounts
@@ -600,6 +621,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         rebuild.last_error_reason,
         rebuild.last_error_message,
     )
+    .with_session_keepalive(current.enable_session_keepalive())
     .with_scheduling(current.concurrency_limit(), current.weight())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
 }
@@ -1168,4 +1190,59 @@ impl ProviderCooldownPort for MemoryCooldownPort {
                 .map(|(_, peak)| *peak))
         })
     }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct CapturedLogs {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl CapturedLogs {
+    pub(crate) fn json_events(&self) -> Vec<serde_json::Value> {
+        let bytes = self.bytes.lock().expect("captured logs lock").clone();
+        String::from_utf8(bytes)
+            .expect("captured logs are UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("captured log is JSON"))
+            .collect()
+    }
+}
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedLogs {
+    type Writer = Self;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes
+            .lock()
+            .map_err(|_| std::io::Error::other("captured logs lock poisoned"))?
+            .extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+pub(crate) fn capture_logs() -> CapturedLogs {
+    static LOGS: std::sync::OnceLock<CapturedLogs> = std::sync::OnceLock::new();
+    LOGS.get_or_init(|| {
+        let logs = CapturedLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(logs.clone())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("install shared test subscriber");
+        logs
+    })
+    .clone()
 }

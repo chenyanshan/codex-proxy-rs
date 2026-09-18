@@ -61,6 +61,9 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 request_id: "request-settings".to_owned(),
             },
             ReplaceRuntimeSettings {
+                oam_proxy: None,
+                session_keepalive_enabled: None,
+                session_keepalive_risk_confirmed: false,
                 disable_fast: None,
                 request_location_enabled: false,
                 request_location: Default::default(),
@@ -100,4 +103,54 @@ fn unused() -> AdminStoreError {
         "settings",
         "unused in this test",
     )
+}
+
+#[tokio::test]
+async fn settings_should_require_keepalive_risk_ack_before_store_call() {
+    let services = super::AdminHarness::new()
+        .settings(std::sync::Arc::new(UnusedSettingsStore))
+        .build()
+        .await;
+    let error = services
+        .settings()
+        .replace(
+            &MutationContext {
+                actor: gateway_admin::model::MutationActor::System,
+                request_id: "request-settings".to_owned(),
+            },
+            ReplaceRuntimeSettings {
+                oam_proxy: None,
+                session_keepalive_enabled: Some(true),
+                session_keepalive_risk_confirmed: false,
+                disable_fast: None,
+                request_location_enabled: false,
+                request_location: Default::default(),
+                model_mappings: Default::default(),
+                refresh_margin_seconds: 3600,
+                refresh_concurrency: 1,
+                max_concurrent_per_account: 1,
+                request_interval_ms: 0,
+                max_waiting_per_key: 0,
+                max_waiting_per_account: 0,
+                concurrency_wait_timeout_seconds: 30,
+                responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
+                rotation_strategy: RotationStrategy::Smart,
+                min_codex_desktop_version: None,
+                min_codex_cli_version: None,
+                usage_retention_days: 31,
+                ops_event_retention_days: 30,
+                audit_retention_days: 30,
+                account_auto_freeze_enabled: true,
+                account_auto_freeze_threshold: 12,
+                account_auto_freeze_window_seconds: 600,
+                account_auto_freeze_duration_seconds: 7_200,
+                account_auto_freeze_probe_enabled: true,
+                account_auto_freeze_probe_model: None,
+                account_auto_freeze_adaptive_concurrency: true,
+            },
+        )
+        .await
+        .expect_err("invalid settings");
+
+    assert_eq!(error.kind(), AdminErrorKind::Invalid);
 }

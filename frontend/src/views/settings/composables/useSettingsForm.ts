@@ -22,6 +22,7 @@ export function useSettingsForm() {
   const savedRequestLocation = shallowRef<RequestLocation>()
   const form = reactive({
     disableFast: false,
+    sessionKeepaliveEnabled: false,
     requestLocationEnabled: false,
     requestLocation: { country: '', region: '', city: '', timezone: '' },
     refreshMarginSeconds: null as number | null,
@@ -104,6 +105,7 @@ export function useSettingsForm() {
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     savedRequestLocation.value = { ...data.requestLocation }
     form.disableFast = data.disableFast
+    form.sessionKeepaliveEnabled = data.sessionKeepaliveEnabled
     form.requestLocationEnabled = data.requestLocationEnabled
     form.requestLocation = { ...data.requestLocation }
     form.refreshMarginSeconds = data.refreshMarginSeconds
@@ -230,6 +232,8 @@ export function useSettingsForm() {
     await saveAction.run(async () => {
       const result = await updateSettings({
         disableFast: form.disableFast,
+        sessionKeepaliveEnabled: form.sessionKeepaliveEnabled,
+        sessionKeepaliveRiskConfirmed: form.sessionKeepaliveEnabled,
         requestLocationEnabled: form.requestLocationEnabled,
         requestLocation,
         modelMappings: mappingPayload(),

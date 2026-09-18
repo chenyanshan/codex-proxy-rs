@@ -21,6 +21,7 @@ const emit = defineEmits<{
   test: []
 }>()
 const open = defineModel<boolean>({ required: true })
+const isDynamic = defineModel<boolean>('isDynamic', { required: true })
 const name = defineModel<string>('name', { required: true })
 const proxyUrl = defineModel<string>('proxyUrl', { required: true })
 const customLocation = defineModel<boolean>('customLocation', { required: true })
@@ -60,6 +61,10 @@ watch(open, () => {
           </template>
         </BaseInput>
       </BaseFormItem>
+      <BaseSwitch v-model="isDynamic" label="动态代理" show-label :disabled="busy || Boolean(proxy?.accountCount)" />
+      <p class="m-0 text-cp-sm text-cp-text-secondary">
+        动态代理仅支持一个，供已开启 State 重写的账户自动使用；不能绑定业务账户。保存后须测试通过，修改地址后须重新测试。
+      </p>
       <BaseSwitch v-model="customLocation" label="自定义时区位置" show-label :disabled="busy" />
       <RequestLocationFields v-if="customLocation" v-model="location" :disabled="busy" />
       <p v-if="proxy?.accountCount && proxyUrl.trim()" class="m-0 text-cp-sm text-cp-warning-text">
