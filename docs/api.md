@@ -452,7 +452,7 @@ Images、独立 Search 及管理员连接测试不受该文本模型限制；连
 
 `record` 包含 `id`、`name`、`isDynamic`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、`location`、
 `lastTestAt`、`lastTest: { success, latencyMs, exitIp, exitIpv4, exitIpv6, message }`、`createdAt`、`updatedAt`。
-`isDynamic` 默认为 false，创建时可设为 true，更新时省略保留。全局最多一个动态代理；已绑定业务账号的代理不能转换，动态代理不能通过账号 ID 绑定、URL 写入或导入绑定成为业务出口。只有测试通过的动态代理可用于 State 探活；修改地址会清除测试结果，须重新调用保存代理的 `/test`。未保存地址的 `/probe` 不授予探活准入。
+`isDynamic` 默认为 false，创建时可设为 true，更新时省略保留。全局最多一个动态代理；已绑定业务账号的代理不能转换，动态代理不能通过账号 ID 绑定、URL 写入或导入绑定成为业务出口。只有测试通过的动态代理可用于 State 重写；修改地址会清除测试结果，须重新调用保存代理的 `/test`。未保存地址的 `/probe` 不授予重写准入。
 
 未测试时 `lastTestAt` / `lastTest` 为 `null`。连通性失败返回 HTTP 200 和 `lastTest.success=false`；
 记录版本过期、重复 URL、删除已绑定的代理返回 409，并发测试满载返回 429。
@@ -940,22 +940,22 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
   "accountId": "acct_example",
   "models": [
     { "model": "5.6 sol", "refreshedAt": "2026-09-18T02:00:00Z", "expireAt": 1789700400, "error": null },
-    { "model": "6", "refreshedAt": null, "expireAt": null, "error": "上游拒绝探活请求" }
+    { "model": "6", "refreshedAt": null, "expireAt": null, "error": "上游拒绝重写请求" }
   ]
 }
 ```
 
-`refreshedAt` 为 UTC 时间，`expireAt` 为 Unix 秒。成功项本地 TTL 为 3600 秒；失败项不延长旧 State 的 TTL。HTTP 200 表示已完成本次逐模型处理，调用方必须检查各项 `error`，可全部失败。前置条件错误为 400，JSON 字段类型或未知字段错误为 422，不存在为 404，同账号刷新中或全局探活并发已满为 409，依赖不可用为 503，未授权为 401。响应不包含 State 原文，并带 `Cache-Control: no-store`。
+`refreshedAt` 为 UTC 时间，`expireAt` 为 Unix 秒。成功项本地 TTL 为 3600 秒；失败项不延长旧 State 的 TTL。HTTP 200 表示已完成本次逐模型处理，调用方必须检查各项 `error`，可全部失败。前置条件错误为 400，JSON 字段类型或未知字段错误为 422，不存在为 404，同账号刷新中或全局重写并发已满为 409，依赖不可用为 503，未授权为 401。响应不包含 State 原文，并带 `Cache-Control: no-store`。
 
-每个模型通过动态代理发送 `hi`，失败最多尝试 3 次，退避间隔 1 秒、2 秒加抖动。429 尊重 `Retry-After`；等待超过 30 秒则本轮停止并显示等待时间，不提前重试。错误包括 HTTP 状态与可关联日志的探活 ID。
+每个模型通过动态代理发送 `hi`，失败最多尝试 3 次，退避间隔 1 秒、2 秒加抖动。429 尊重 `Retry-After`；等待超过 30 秒则本轮停止并显示等待时间，不提前重试。错误包括 HTTP 状态与可关联日志的重写 ID。
 
 手动刷新不改变后台周期；后台每轮结束随机等待 3000–3480 秒。运维和业务分别使用独立 Client 与各自代理，业务仍走原账号出口。该实验性跨轮次覆盖与已核验官方 State 合同的偏离、模型名限制及停止方式见 [设计说明](session-keepalive-design.md)。
 
 ## 8. 运行设置
 
-`sessionKeepaliveEnabled` 默认 false，更新省略或 null 保留；提交 true 时必须同时提交 `sessionKeepaliveRiskConfirmed: true`，且代理管理中存在测试通过的唯一动态代理，否则拒绝。确认字段仅用于本次操作，不持久化也不返回。关闭全局开关停止新请求的 State 覆盖及后续探活；账号选择保留。
+`sessionKeepaliveEnabled` 默认 false，更新省略或 null 保留；提交 true 时必须同时提交 `sessionKeepaliveRiskConfirmed: true`，且代理管理中存在测试通过的唯一动态代理，否则拒绝。确认字段仅用于本次操作，不持久化也不返回。关闭全局开关停止新请求的 State 覆盖及后续重写；账号选择保留。
 
-探活出口在代理管理中以 `isDynamic` 配置。旧 `oamProxy` 保留兼容读取但不再生效，更新仅接受空值或省略，非空更新返回错误，引导使用代理管理。迁移与模型精确匹配要求见 [设计说明](session-keepalive-design.md)。
+重写出口在代理管理中以 `isDynamic` 配置。旧 `oamProxy` 保留兼容读取但不再生效，更新仅接受空值或省略，非空更新返回错误，引导使用代理管理。迁移与模型精确匹配要求见 [设计说明](session-keepalive-design.md)。
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |

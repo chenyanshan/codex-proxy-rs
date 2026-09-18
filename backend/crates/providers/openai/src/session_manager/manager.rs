@@ -91,7 +91,7 @@ impl SessionManager {
         }
     }
 
-    /// 失效时移除当前代次；旧探活持有的 Arc 不能再写回新代次缓存。
+    /// 失效时移除当前代次；旧重写持有的 Arc 不能再写回新代次缓存。
     pub async fn invalidate(&self, account_id: &ProviderAccountId) {
         self.accounts.write().await.remove(account_id);
     }
@@ -136,7 +136,7 @@ impl SessionManager {
             .try_lock()
             .map_err(|_| admin_error(ProviderAdminErrorKind::Conflict, "该账号正在刷新 State"))?;
         let _capacity = self.capacity.try_acquire().map_err(|_| {
-            admin_error(ProviderAdminErrorKind::Conflict, "探活并发已满，请稍后重试")
+            admin_error(ProviderAdminErrorKind::Conflict, "重写并发已满，请稍后重试")
         })?;
         let client = self.client(&proxy).await?;
         let credential = self
@@ -151,12 +151,12 @@ impl SessionManager {
         gateway_core::account::validate_session_keepalive_models(
             account.session_keepalive_models(),
         )
-        .map_err(|_| admin_error(ProviderAdminErrorKind::Invalid, "请配置有效的探活模型"))?;
+        .map_err(|_| admin_error(ProviderAdminErrorKind::Invalid, "请配置有效的重写模型"))?;
         let mut models = Vec::with_capacity(account.session_keepalive_models().len());
         for model in account.session_keepalive_models() {
             let result =
                 if self.policy.load_oam_proxy().await.ok().flatten().as_ref() != Some(&proxy) {
-                    Err("全局保活已关闭或动态代理已变化，停止本轮探活".to_owned())
+                    Err("全局保活已关闭或动态代理已变化，停止本轮重写".to_owned())
                 } else if !account.model_access().allows(model) {
                     Err("该账号未允许此模型".to_owned())
                 } else if sessions
@@ -257,7 +257,7 @@ impl SessionManager {
                     && current.model_access().allows(model)
             }) || self.policy.load_oam_proxy().await.ok().flatten().as_ref() != Some(proxy)
             {
-                return Err("账号或动态代理配置已变化，停止探活重试".to_owned());
+                return Err("账号或动态代理配置已变化，停止重写重试".to_owned());
             }
             let error = match self
                 .heartbeat(
@@ -297,7 +297,7 @@ impl SessionManager {
             tracing::info!(target: "session_keepalive", account_id = account.id().as_str(), model, attempt, retry_delay_ms = delay.as_millis(), error, "Retrying session probe");
             tokio::time::sleep(delay).await;
         }
-        unreachable!("至少执行一次探活")
+        unreachable!("至少执行一次重写")
     }
 
     async fn heartbeat(
@@ -361,15 +361,15 @@ impl SessionManager {
         };
         let headers = backend
             .request_headers_for_http_response(&request, context)
-            .map_err(|_| "探活请求头无效")?;
-        let body = serde_json::to_vec(request.body()).map_err(|_| "探活请求编码失败")?;
+            .map_err(|_| "重写请求头无效")?;
+        let body = serde_json::to_vec(request.body()).map_err(|_| "重写请求编码失败")?;
         let outgoing = backend
             .build_http_sse_request(headers, body)
-            .map_err(|_| "探活请求编码失败")?;
+            .map_err(|_| "重写请求编码失败")?;
         log.record("request", json!({"method":outgoing.method().as_str(), "path":outgoing.url().path(), "proxyEndpoint":proxy.endpoint(), "headers":diagnostics::headers(outgoing.headers()), "body":request.body()}));
         let response = client.execute(outgoing).await.map_err(|error| {
             log.record("transport_error", json!({"timeout":error.is_timeout(), "connect":error.is_connect(), "error":error.without_url().to_string(), "elapsedMs":started.elapsed().as_millis()}));
-            format!("运维网络请求失败或超时（探活 {probe_id}）")
+            format!("运维网络请求失败或超时（重写 {probe_id}）")
         })?;
         let status = response.status();
         log.record("response_headers", json!({"status":status.as_u16(), "headers":diagnostics::headers(response.headers()), "elapsedMs":started.elapsed().as_millis()}));
@@ -391,7 +391,7 @@ impl SessionManager {
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(_) => {
-                    read_error = Some("探活响应中断或超时");
+                    read_error = Some("重写响应中断或超时");
                     break;
                 }
             };
@@ -405,7 +405,7 @@ impl SessionManager {
                 let events = match decoder.push(&chunk) {
                     Ok(events) => events,
                     Err(_) => {
-                        read_error = Some("探活响应格式无效");
+                        read_error = Some("重写响应格式无效");
                         break;
                     }
                 };
@@ -437,7 +437,7 @@ impl SessionManager {
                         .and_then(Value::as_str)
                         .map(str::to_owned)
                 })
-                .unwrap_or_else(|| "上游拒绝探活请求，详情见探活日志".to_owned());
+                .unwrap_or_else(|| "上游拒绝重写请求，详情见重写日志".to_owned());
             let mut safe = Value::String(message);
             diagnostics::redact(&mut safe, &log.secrets);
             message = safe
@@ -447,22 +447,22 @@ impl SessionManager {
                 .take(512)
                 .collect();
             return Err(format!(
-                "HTTP {}：{}（探活 {}）",
+                "HTTP {}：{}（重写 {}）",
                 status.as_u16(),
                 message,
                 probe_id
             ));
         }
         if truncated {
-            return Err(format!("探活响应超出上限（探活 {probe_id}）"));
+            return Err(format!("重写响应超出上限（重写 {probe_id}）"));
         }
         if let Some(error) = read_error {
-            return Err(format!("{error}（探活 {probe_id}）"));
+            return Err(format!("{error}（重写 {probe_id}）"));
         }
         if completion != Some(true) {
-            return Err(format!("上游探活未成功完成（探活 {probe_id}）"));
+            return Err(format!("上游重写未成功完成（重写 {probe_id}）"));
         }
-        state.ok_or_else(|| format!("上游未返回有效 State（探活 {probe_id}）"))
+        state.ok_or_else(|| format!("上游未返回有效 State（重写 {probe_id}）"))
     }
 
     async fn store_refreshed_state(
@@ -488,7 +488,7 @@ impl SessionManager {
                     .iter()
                     .any(|selected| selected == model)
         }) {
-            return Err("账号状态已变化，已丢弃探活结果");
+            return Err("账号状态已变化，已丢弃重写结果");
         }
         let current_proxy = self
             .policy
@@ -496,14 +496,14 @@ impl SessionManager {
             .await
             .map_err(|_| "运维配置校验失败")?;
         if current_proxy.as_ref() != Some(proxy) {
-            return Err("运维代理已变化，已丢弃探活结果");
+            return Err("运维代理已变化，已丢弃重写结果");
         }
         let accounts = self.accounts.read().await;
         if !accounts
             .get(account.id())
             .is_some_and(|current| Arc::ptr_eq(current, sessions))
         {
-            return Err("账号配置已变化，已丢弃探活结果");
+            return Err("账号配置已变化，已丢弃重写结果");
         }
         let expire_at = Utc::now().timestamp() + TTL_SECONDS;
         sessions.states.write().await.insert(

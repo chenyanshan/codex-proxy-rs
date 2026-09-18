@@ -23,7 +23,7 @@ function confirm() {
 <template>
   <BaseCard title="会话保活">
     <div class="grid gap-3">
-      <BaseSwitch :model-value="enabled" label="开启 State 探活" show-label :disabled="disabled" @click.capture.prevent="toggle" />
+      <BaseSwitch :model-value="enabled" label="开启 State 重写" show-label :disabled="disabled" @click.capture.prevent="toggle" />
       <p class="m-0 text-cp-sm text-cp-text-secondary">
         默认关闭。启用后，仅对手动开启的账户和所选模型定期发送 hi，并更新各自的 State。
         请先在 <RouterLink to="/proxies" class="text-cp-primary-text">
@@ -35,7 +35,7 @@ function confirm() {
       </p>
     </div>
   </BaseCard>
-  <BaseConfirmModal v-model="confirming" title="确认开启 State 探活" confirm-text="我已了解风险，开启" @confirm="confirm">
+  <BaseConfirmModal v-model="confirming" title="确认开启 State 重写" confirm-text="我已了解风险，开启" @confirm="confirm">
     此功能会主动调用所选模型，可能导致账户异常、限流或额外消耗。是否确认承担风险并开启？
   </BaseConfirmModal>
 </template>

@@ -69,7 +69,7 @@ async fn upstream_rejection_reports_status_and_probe_id_without_authentication()
     for model in result.models {
         let error = model.error.unwrap();
         assert!(error.contains("HTTP 403"));
-        assert!(error.contains("探活"));
+        assert!(error.contains("重写"));
         assert!(error.contains("[REDACTED]"));
         assert!(!error.contains("acct_a"));
     }

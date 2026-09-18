@@ -309,7 +309,7 @@ pub enum AccountConnectionTestEvent {
 pub type AccountConnectionTestEventStream =
     Pin<Box<dyn Stream<Item = AccountConnectionTestEvent> + Send + 'static>>;
 
-/// 手动探活的逐模型结果，不承载 State 或鉴权原文。
+/// 手动重写的逐模型结果，不承载 State 或鉴权原文。
 #[derive(Debug, Clone)]
 pub struct SessionModelRefresh {
     pub model: String,

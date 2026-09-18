@@ -767,7 +767,7 @@ fn context_string(context: &Map<String, Value>, field: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// 账户连接测试与 State 探活共用轻量模型调用，保持输入协议一致。
+/// 账户连接测试与 State 重写共用轻量模型调用，保持输入协议一致。
 pub(crate) fn build_connection_test_operation(
     upstream_model: &gateway_core::routing::UpstreamModelId,
     input_text: &str,

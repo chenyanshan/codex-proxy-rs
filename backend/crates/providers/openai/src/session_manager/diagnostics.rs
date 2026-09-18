@@ -1,4 +1,4 @@
-//! 探活专用结构化诊断；State 按管理员要求保留，鉴权与代理认证仍脱敏。
+//! 重写专用结构化诊断；State 按管理员要求保留，鉴权与代理认证仍脱敏。
 
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};

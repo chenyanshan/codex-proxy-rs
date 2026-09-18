@@ -1401,7 +1401,7 @@ pub struct AccountStateChange {
     pub message: Option<String>,
 }
 
-/// 探活逐模型发请求，限制单账号规模并拒绝重复 ID，防止误配放大调用。
+/// 重写逐模型发请求，限制单账号规模并拒绝重复 ID，防止误配放大调用。
 pub fn validate_session_keepalive_models(models: &[String]) -> Result<(), &'static str> {
     if models.is_empty()
         || models.len() > 32
@@ -1414,7 +1414,7 @@ pub fn validate_session_keepalive_models(models: &[String]) -> Result<(), &'stat
             .len()
             != models.len()
     {
-        return Err("探活模型需为 1 至 32 个不重复的有效模型 ID");
+        return Err("重写模型需为 1 至 32 个不重复的有效模型 ID");
     }
     Ok(())
 }

@@ -2,14 +2,14 @@
 
 ## 交付范围
 
-分支 `feat/session-keepalive` 实现全局风险确认、逐账号开关、可选模型、唯一动态代理、手动与后台探活、失败重试、按账号与模型隔离的 State 缓存，以及诊断日志。使用流程和边界见 [设计说明](session-keepalive-design.md)，接口见 [API](api.md#会话-state-刷新)。
+分支 `feat/session-keepalive` 实现全局风险确认、逐账号开关、可选模型、唯一动态代理、手动与后台重写、失败重试、按账号与模型隔离的 State 缓存，以及诊断日志。使用流程和边界见 [设计说明](session-keepalive-design.md)，接口见 [API](api.md#会话-state-刷新)。
 
 主要入口：
 
 | 范围 | 文件 |
 | --- | --- |
 | 缓存、刷新、重试、调度 | `backend/crates/providers/openai/src/session_manager/manager.rs` |
-| 探活诊断与脱敏 | `backend/crates/providers/openai/src/session_manager/diagnostics.rs` |
+| 重写诊断与脱敏 | `backend/crates/providers/openai/src/session_manager/diagnostics.rs` |
 | 共用测试请求构造 | `backend/crates/providers/openai/src/transport/request.rs` |
 | 动态代理隔离与测试准入 | Store 的 `postgres/proxies.rs`、`runtime_settings.rs` |
 | 持久化 | `backend/migrations/0017_session_keepalive_controls.sql` |
@@ -64,15 +64,15 @@ Cargo 使用 `RUST_MIN_STACK=16777216 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBU
 ## 部署与真实业务验收
 
 1. 应用迁移后，全局功能仍关闭。到代理管理保存一个动态代理并测试；原 `oamProxy` 保留供回退，但不再生效，不会自动转换业务代理。
-2. 在设置页确认风险、开启并保存。为选定的 OpenAI OAuth 账户开启探活，按实际账户目录选择上游模型 ID。
-3. 在账户页手动刷新，核对逐模型结果；失败会自动重试，最终错误通过探活 ID 对应 `session_keepalive` 日志。日志包含 State 与请求/响应字段，其他认证内容脱敏；禁止把真实日志放入提交或公开报告。
+2. 在设置页确认风险、开启并保存。为选定的 OpenAI OAuth 账户开启重写，按实际账户目录选择上游模型 ID。
+3. 在账户页手动刷新，核对逐模型结果；失败会自动重试，最终错误通过重写 ID 对应 `session_keepalive` 日志。日志包含 State 与请求/响应字段，其他认证内容脱敏；禁止把真实日志放入提交或公开报告。
 4. 用原客户端验证连续工具调用、原生续写、换号重试、HTTP 和复用 WS 连接；确认业务继续走原出口、State 能在真实双出口间使用。
 5. 观察至少一轮后台更新及 TTL，确认配额、费用和限流影响。模型较多时手动刷新等待更长，部署反向代理超时必须匹配管理请求；每模型最多 3 次 30 秒请求和 2 次至多 30 秒退避，前端等待上限覆盖 32 个模型。
 
-尚未验证真实上游接受的模型 ID、State 实际寿命、跨出口可用性或业务收益。官方协议偏离见设计说明。代理连通测试只证明代理可连通，不证明上游一定接受探活。自动轮间抖动、重试和规模限制不能保证缓存始终有效。
+尚未验证真实上游接受的模型 ID、State 实际寿命、跨出口可用性或业务收益。官方协议偏离见设计说明。代理连通测试只证明代理可连通，不证明上游一定接受重写。自动轮间抖动、重试和规模限制不能保证缓存始终有效。
 
 ## 停用与回退
 
-关闭全局开关并保存，停止新业务请求的 State 覆盖及后续探活；关闭单个账号仅停用该账号。已发出的请求无法撤回。进程重启清空内存 State。
+关闭全局开关并保存，停止新业务请求的 State 覆盖及后续重写；关闭单个账号仅停用该账号。已发出的请求无法撤回。进程重启清空内存 State。
 
 程序回退前先关闭全局和账号开关。旧二进制可能拒绝包含未知迁移的数据库；使用保留新迁移的回退构建，或在恢复环境还原匹配旧版本的备份并验收，不删除迁移记录或修改旧 checksum。
