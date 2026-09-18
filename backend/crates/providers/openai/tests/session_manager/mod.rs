@@ -173,7 +173,7 @@ fn model_match(model: &'static str) -> impl wiremock::Match {
 
 use gateway_core::provider_ports::{ProviderSessionTicket, ProviderSessionTicketPort};
 #[derive(Default)]
-struct MemoryTickets {
+pub(super) struct MemoryTickets {
     entries: Mutex<
         std::collections::HashMap<(String, String), (ProviderSessionTicket, tokio::time::Instant)>,
     >,
@@ -246,4 +246,43 @@ impl MemoryTickets {
             ticket.expires_at = Utc::now().timestamp() + 599;
         }
     }
+}
+
+async fn capture_cookie(store: &Arc<MemoryAccountStore>) {
+    use crate::support::{
+        MemoryCooldownPort, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
+    };
+    use gateway_core::{account::AccountFeedbackStats, routing::ProviderKind};
+    use provider_openai::credential::{
+        CodexCookiePolicy, CodexCredentialQuotaService, CodexCredentialSelector,
+    };
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let quota = Arc::new(CodexCredentialQuotaService::new(
+        store.repository(),
+        wire_profile(),
+        reqwest::Client::new(),
+        provider_openai::OFFICIAL_CODEX_BASE_URL.to_owned(),
+        Arc::new(MemoryCooldownPort::default()),
+        leases.clone(),
+        crate::support::runtime_policy(),
+    ));
+    let selector = CodexCredentialSelector::new(
+        ProviderKind::new("openai").unwrap(),
+        store.repository(),
+        leases,
+        Arc::new(MemorySessionAffinity::default()),
+        Arc::new(MemorySessionExclusions::default()),
+        quota,
+        Arc::new(AccountFeedbackStats::default()),
+        CodexCookiePolicy::official().unwrap(),
+    );
+    let outcome = selector
+        .capture_response_cookies(
+            &store.account("acct_a").unwrap(),
+            &url::Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap(),
+            &["__cf_bm=updated; Path=/; Domain=chatgpt.com; Secure; Max-Age=1800".to_owned()],
+        )
+        .await
+        .unwrap();
+    assert!(outcome.credential_revision.is_some());
 }

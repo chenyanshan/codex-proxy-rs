@@ -945,7 +945,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 }
 ```
 
-`refreshedAt` 为 UTC 时间，`expireAt` 为 Unix 秒。成功项 Redis 票据 TTL 为 3600 秒；失败项不延长旧 State 的 TTL。仅刷新缺失、过期或剩余不足 10 分钟的票据；每模型前三轮单探针且轮后固定等待 6 秒，第四轮起按全局 `sessionRewriteConcurrency` 并发探测，整轮探测结束后等待 `sessionRewriteRetryIntervalSeconds` 秒（429 可按 Retry-After 延长），成功后立即退出并更新缓存；失败模型会持续重试，接口可能长时间等待，直至全部模型成功或配置变化使其退出。HTTP 200 表示已完成本次逐模型处理，调用方必须检查各项 `error`，可全部失败。前置条件错误为 400，JSON 字段类型或未知字段错误为 422，不存在为 404，同账号刷新中或全局探活并发已满为 409，依赖不可用为 503，未授权为 401。响应不包含 State 原文，并带 `Cache-Control: no-store`。
+`refreshedAt` 为 UTC 时间，`expireAt` 为 Unix 秒。成功项 Redis 票据 TTL 为 3600 秒；失败项不延长旧 State 的 TTL。仅刷新缺失、过期或剩余不足 10 分钟的票据；每模型前三轮单探针且轮后固定等待 6 秒，第四轮起按全局 `sessionRewriteConcurrency` 并发探测，整轮探测结束后等待 `sessionRewriteRetryIntervalSeconds` 秒（429 可按 Retry-After 延长），成功后立即退出并更新缓存；失败模型会持续重试，接口可能长时间等待，直至全部模型成功或账号禁用、鉴权身份／相关模型／代理配置变化使其退出。Cookie 更新及无关账号设置修改不使未过期票据失效。HTTP 200 表示已完成本次逐模型处理，调用方必须检查各项 `error`，可全部失败。前置条件错误为 400，JSON 字段类型或未知字段错误为 422，不存在为 404，同账号刷新中或全局探活并发已满为 409，依赖不可用为 503，未授权为 401。响应不包含 State 原文，并带 `Cache-Control: no-store`。
 
 前端手动刷新使用 `POST /api/admin/accounts/session-state/refresh/stream`，鉴权与 JSON 请求体同上。响应为 `text/event-stream`，发送心跳并禁用代理缓冲；每个模型完成写入或终止时发送 `data: {"type":"model","data":{...逐模型结果...}}`，全体结束时发送 `{"type":"complete","data":{...汇总结果...}}`。已经建立流之后的前置条件或依赖错误通过 `{"type":"error","message":"脱敏错误"}` 返回；鉴权与请求解析错误仍使用标准 HTTP 错误信封。流不返回凭证。断开连接会取消未完成的刷新与重试，已写入的成功缓存保留；客户端不得自动重连而重复发起刷新。
 

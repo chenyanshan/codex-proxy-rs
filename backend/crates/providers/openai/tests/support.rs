@@ -622,6 +622,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         rebuild.last_error_message,
     )
     .with_session_keepalive(current.enable_session_keepalive())
+    .with_session_keepalive_models(current.session_keepalive_models().to_vec())
     .with_scheduling(current.concurrency_limit(), current.weight())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
 }

@@ -21,6 +21,7 @@ async fn tickets_survive_repository_restart_keep_absolute_expiry_and_isolate_mod
     let ticket = ProviderSessionTicket {
         value: format!("gAAAAA{}", "A".repeat(286)),
         credential_revision: 7,
+        credential_binding: Some([42; 32]),
         expires_at: expiry,
     };
     first.store(&account, "model-a", &ticket).await.unwrap();
@@ -30,6 +31,7 @@ async fn tickets_survive_repository_restart_keep_absolute_expiry_and_isolate_mod
     assert_eq!(loaded.value, ticket.value);
     assert_eq!(loaded.expires_at, expiry);
     assert_eq!(loaded.credential_revision, 7);
+    assert_eq!(loaded.credential_binding, Some([42; 32]));
     assert!(second.load(&account, "model-b").await.unwrap().is_none());
     assert!(
         second

@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 pub struct ProviderSessionTicket {
     pub value: String,
     pub credential_revision: u64,
+    /// Provider 定义的鉴权绑定；旧缓存没有此字段时仍按原版本校验。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_binding: Option<[u8; 32]>,
     pub expires_at: i64,
 }
 

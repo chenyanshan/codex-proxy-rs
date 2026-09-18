@@ -213,9 +213,8 @@ impl ProviderAdmin for OpenAiAdminProvider {
         if account_ids.is_empty() {
             return;
         }
-        for id in account_ids {
-            self.sessions.invalidate(id).await;
-        }
+        // 普通设置与 Cookie 版本变化不清票；读取和写入时校验实际鉴权绑定。
+        // 禁用和删除仍经 account_unavailable 中断探测并清理票据。
         self.quota.invalidate_scheduling(account_ids);
         if let Err(error) = self.catalog.invalidate() {
             tracing::warn!(

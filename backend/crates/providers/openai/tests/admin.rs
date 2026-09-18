@@ -2165,3 +2165,39 @@ async fn api_key_admin_exposes_only_configuration_and_preserves_key_when_rotatin
         ProviderAdminErrorKind::Unsupported
     );
 }
+
+#[tokio::test]
+async fn account_facts_preserve_state_tickets_but_unavailability_clears_them() {
+    use gateway_core::provider_ports::{ProviderSessionTicket, ProviderSessionTicketPort};
+    let config = valid_config();
+    let tickets = Arc::new(crate::session_manager::MemoryTickets::default());
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports().with_session_tickets(tickets.clone()),
+    )
+    .await
+    .unwrap();
+    let account = ProviderAccountId::new("acct_retained_ticket").unwrap();
+    let ticket = ProviderSessionTicket {
+        value: format!("gAAAAA{}", "A".repeat(286)),
+        credential_revision: 1,
+        credential_binding: Some([7; 32]),
+        expires_at: Utc::now().timestamp() + 3600,
+    };
+    for model in ["gpt-6-astra", "gpt-5.6-sol"] {
+        tickets.store(&account, model, &ticket).await.unwrap();
+    }
+    bundle
+        .admin_provider()
+        .account_facts_changed(std::slice::from_ref(&account))
+        .await;
+    for model in ["gpt-6-astra", "gpt-5.6-sol"] {
+        let retained = tickets.load(&account, model).await.unwrap().unwrap();
+        assert_eq!(retained.value, ticket.value);
+        assert_eq!(retained.expires_at, ticket.expires_at);
+    }
+    bundle.admin_provider().account_unavailable(&account).await;
+    for model in ["gpt-6-astra", "gpt-5.6-sol"] {
+        assert!(tickets.load(&account, model).await.unwrap().is_none());
+    }
+}

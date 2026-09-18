@@ -359,8 +359,8 @@ async fn rewritten_business_http_uses_original_proxy_and_never_oam_pool() {
 }
 
 #[tokio::test]
-async fn credential_revision_change_prevents_reusing_previous_state() {
-    use gateway_core::account::ProviderAccount;
+async fn actual_credential_rotation_prevents_reusing_previous_state() {
+    use provider_openai::credential::CodexCredentialData;
     let proxy = MockServer::start().await;
     let (store, _, manager) = fixture(Some(&proxy.uri())).await;
     for model in SESSION_KEEPALIVE_MODELS {
@@ -369,33 +369,91 @@ async fn credential_revision_change_prevents_reusing_previous_state() {
     let id = ProviderAccountId::new("acct_a").unwrap();
     manager.refresh(&id).await.unwrap();
     let current = store.account("acct_a").unwrap();
-    let rotated = ProviderAccount::new(
-        id,
-        current.provider().clone(),
-        current.name().to_owned(),
-        current.upstream_user_id().map(str::to_owned),
-        "oauth".to_owned(),
-        current.revision().next().unwrap(),
-        current.access_token_expires_at(),
-    )
-    .with_session_keepalive(true)
-    .with_session_keepalive_models(vec!["gpt-5.6-sol".to_owned(), "gpt-6-astra".to_owned()])
-    .with_account_facts(
-        true,
-        current.credential_state(),
-        current.quota(),
-        None,
-        None,
-    );
+    assert!(manager.available(&current, "gpt-6-astra").await);
+    let repository = store.repository();
+    let mut data = repository.load_complete_data(&current).await.unwrap();
+    let CodexCredentialData::OAuth(ref mut oauth) = data else {
+        panic!("OAuth fixture");
+    };
+    oauth.access_token = "rotated-token".to_owned();
+    repository
+        .compare_and_swap_data(&current, data)
+        .await
+        .unwrap();
+    let rotated = store.account("acct_a").unwrap();
+    assert!(!manager.available(&rotated, "gpt-6-astra").await);
     let mut req = request("gpt-6-astra");
-    manager.rewrite(&current, &mut req).await;
-    assert_eq!(
-        req.turn_state.as_deref(),
-        Some(state("old-credential-state").as_str())
-    );
-    let mut req = request("gpt-6-astra");
-    manager.rewrite(&rotated, &mut req).await;
+    assert!(!manager.rewrite(&rotated, &mut req).await);
     assert_eq!(req.turn_state.as_deref(), Some("client-state"));
+}
+
+#[tokio::test]
+async fn cookie_capture_preserves_tickets_expiry_and_success_pruning_after_restart() {
+    let proxy = MockServer::start().await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(&proxy, "acct_a", model, success("retained")).await;
+    }
+    let id = ProviderAccountId::new("acct_a").unwrap();
+    let before = manager.refresh(&id).await.unwrap();
+    let previous = store.account("acct_a").unwrap();
+    capture_cookie(&store).await;
+    let current = store.account("acct_a").unwrap();
+    assert_ne!(previous.revision(), current.revision());
+    drop(manager);
+    let manager = SessionManager::new(
+        store.repository(),
+        policy.clone(),
+        wire_profile(),
+        "http://upstream.invalid/backend-api".to_owned(),
+        Some(policy.tickets.clone()),
+    );
+    for model in SESSION_KEEPALIVE_MODELS {
+        assert!(manager.available(&current, model).await);
+        let mut req = request(model);
+        assert!(manager.rewrite(&current, &mut req).await);
+        assert_eq!(req.turn_state.as_deref(), Some(state("retained").as_str()));
+    }
+    let after = manager.refresh(&id).await.unwrap();
+    for (old, new) in before.models.iter().zip(&after.models) {
+        assert_eq!(old.expire_at, new.expire_at);
+        assert!(new.error.is_none());
+    }
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn cookie_capture_during_probe_does_not_discard_success() {
+    let proxy = MockServer::start().await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(
+            &proxy,
+            "acct_a",
+            model,
+            success("inflight").set_delay(Duration::from_millis(250)),
+        )
+        .await;
+    }
+    let id = ProviderAccountId::new("acct_a").unwrap();
+    let pending = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.refresh(&id).await })
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while proxy.received_requests().await.unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    capture_cookie(&store).await;
+    let result = pending.await.unwrap().unwrap();
+    assert!(result.models.iter().all(|item| item.error.is_none()));
+    let account = store.account("acct_a").unwrap();
+    for model in SESSION_KEEPALIVE_MODELS {
+        assert!(manager.available(&account, model).await);
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -1032,6 +1090,7 @@ async fn selector_skips_missing_ticket_and_recovers_only_the_ready_account_model
             &ProviderSessionTicket {
                 value: state("ready"),
                 credential_revision: account.revision().get(),
+                credential_binding: None,
                 expires_at: Utc::now().timestamp() + 3600,
             },
         )
@@ -1047,4 +1106,76 @@ async fn selector_skips_missing_ticket_and_recovers_only_the_ready_account_model
     assert!(selector.select(&other).await.is_err());
     policy.tickets.unavailable.store(true, Ordering::SeqCst);
     assert!(selector.select(&selection).await.is_err());
+}
+
+#[tokio::test]
+async fn legacy_ticket_is_accepted_only_while_its_credential_revision_matches() {
+    let (store, policy, manager) = fixture(None).await;
+    let current = store.account("acct_a").unwrap();
+    let legacy: ProviderSessionTicket = serde_json::from_value(json!({
+        "value": state("legacy"), "credential_revision": current.revision().get(),
+        "expires_at": Utc::now().timestamp() + 3600
+    }))
+    .unwrap();
+    assert!(legacy.credential_binding.is_none());
+    policy
+        .tickets
+        .store(current.id(), "gpt-6-astra", &legacy)
+        .await
+        .unwrap();
+    assert!(manager.available(&current, "gpt-6-astra").await);
+    capture_cookie(&store).await;
+    assert!(
+        !manager
+            .available(&store.account("acct_a").unwrap(), "gpt-6-astra")
+            .await
+    );
+}
+
+#[tokio::test]
+async fn credential_rotation_during_probe_discards_old_identity_result() {
+    use provider_openai::credential::CodexCredentialData;
+    let proxy = MockServer::start().await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(
+            &proxy,
+            "acct_a",
+            model,
+            success("stale").set_delay(Duration::from_millis(250)),
+        )
+        .await;
+    }
+    let id = ProviderAccountId::new("acct_a").unwrap();
+    let pending = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.refresh(&id).await })
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while proxy.received_requests().await.unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let account = store.account("acct_a").unwrap();
+    let repository = store.repository();
+    let mut data = repository.load_complete_data(&account).await.unwrap();
+    let CodexCredentialData::OAuth(ref mut oauth) = data else {
+        panic!("OAuth fixture");
+    };
+    oauth.access_token = "rotated-during-probe".to_owned();
+    repository
+        .compare_and_swap_data(&account, data)
+        .await
+        .unwrap();
+    let result = pending.await.unwrap().unwrap();
+    assert!(result.models.iter().all(|item| item.error.is_some()));
+    for model in SESSION_KEEPALIVE_MODELS {
+        assert!(
+            !manager
+                .available(&store.account("acct_a").unwrap(), model)
+                .await
+        );
+    }
 }

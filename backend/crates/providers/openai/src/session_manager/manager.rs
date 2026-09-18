@@ -22,10 +22,11 @@ use reqwest::Client;
 use super::diagnostics;
 use secrecy::ExposeSecret;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
 use crate::{
-    credential::CodexCredentialRepository,
+    credential::{CodexCredentialRepository, CodexRuntimeCredential},
     transport::{
         CodexBackendClient, CodexRequestContext,
         profile::CodexWireProfileState,
@@ -95,6 +96,7 @@ impl SessionManager {
         cache.generation = cache.generation.wrapping_add(1);
         cache.cancelled.cancel();
         cache.cancelled = tokio_util::sync::CancellationToken::new();
+        tracing::info!(target: "session_keepalive", account_id = account_id.as_str(), reason = "account_unavailable", "Session tickets invalidated");
         if let Some(tickets) = &self.tickets
             && tickets.clear(account_id).await.is_err()
         {
@@ -197,6 +199,8 @@ impl SessionManager {
             .authentication
             .authorization_header()
             .map_err(|_| admin_error(ProviderAdminErrorKind::Invalid, "账号鉴权不可用"))?;
+        let binding = credential_binding(&account, &credential)
+            .map_err(|_| admin_error(ProviderAdminErrorKind::Invalid, "账号鉴权不可用"))?;
         gateway_core::account::validate_session_keepalive_models(
             account.session_keepalive_models(),
         )
@@ -229,7 +233,7 @@ impl SessionManager {
                         biased;
                         () = cancelled.cancelled() => Err("账号配置已变化，已停止重写".to_owned()),
                         result = self.refresh_model_round(account, proxy, sessions, generation, model,
-                            client, authorization.expose_secret(), &credential.installation_id, policy.concurrency()) => result,
+                            client, authorization.expose_secret(), &credential.installation_id, &binding, policy.concurrency()) => result,
                     };
                     let item = match result {
                         Ok(None) => return None,
@@ -299,15 +303,30 @@ impl SessionManager {
         client: &Client,
         authorization: &str,
         installation_id: &str,
+        binding: &[u8; 32],
         configured_concurrency: u32,
     ) -> Result<Option<i64>, String> {
-        self.validate_refresh_context(account, proxy, sessions, generation, model)
+        self.validate_refresh_context(account, proxy, sessions, generation, model, binding)
             .await
             .map_err(str::to_owned)?;
-        if let Some(ticket) = self.load_ticket(account, model).await?
-            && ticket.expires_at - Utc::now().timestamp() >= REFRESH_BEFORE_SECONDS
-        {
-            return Ok(Some(ticket.expires_at));
+        match self.load_ticket(account, model).await {
+            Ok(Some(ticket))
+                if ticket.expires_at - Utc::now().timestamp() >= REFRESH_BEFORE_SECONDS =>
+            {
+                return Ok(Some(ticket.expires_at));
+            }
+            Err(reason)
+                if matches!(
+                    reason.as_str(),
+                    "cache_not_configured" | "cache_read_failed" | "credential_lookup_failed"
+                ) =>
+            {
+                return Err(format!("State 缓存或鉴权读取失败：{reason}"));
+            }
+            Err(reason) => {
+                tracing::info!(target: "session_keepalive", account_id = account.id().as_str(), model, reason, "Session ticket requires refresh");
+            }
+            _ => {}
         }
         if sessions
             .retry_after
@@ -343,7 +362,9 @@ impl SessionManager {
             Ok((state, remaining)) => {
                 drop(remaining);
                 let expiry = self
-                    .store_refreshed_state(account, proxy, sessions, generation, model, state)
+                    .store_refreshed_state(
+                        account, proxy, sessions, generation, model, binding, state,
+                    )
                     .await
                     .map_err(str::to_owned)?;
                 sessions.attempts.lock().await.remove(model);
@@ -512,22 +533,27 @@ impl SessionManager {
         sessions: &AccountSessions,
         generation: u64,
         model: &str,
+        binding: &[u8; 32],
     ) -> Result<(), &'static str> {
         let current = self
             .repository
             .store()
-            .get_account(account.id())
+            .load_current_credential(account.id())
             .await
             .map_err(|_| "账号状态校验失败")?;
-        if !current.as_ref().is_some_and(|current| {
-            eligible(current)
-                && current.revision() == account.revision()
-                && current.model_access().allows(model)
-                && current
-                    .session_keepalive_models()
-                    .iter()
-                    .any(|selected| selected == model)
-        }) {
+        let credential = self
+            .repository
+            .decode_runtime_credential(&current)
+            .map_err(|_| "账号鉴权校验失败")?;
+        if !eligible(&current.account)
+            || !current.account.model_access().allows(model)
+            || !current
+                .account
+                .session_keepalive_models()
+                .iter()
+                .any(|selected| selected == model)
+            || credential_binding(&current.account, &credential)? != *binding
+        {
             return Err("账号状态已变化，已丢弃重写结果");
         }
         let current_proxy = self
@@ -552,9 +578,10 @@ impl SessionManager {
         sessions: &AccountSessions,
         generation: u64,
         model: &str,
+        binding: &[u8; 32],
         state: String,
     ) -> Result<i64, &'static str> {
-        self.validate_refresh_context(account, proxy, sessions, generation, model)
+        self.validate_refresh_context(account, proxy, sessions, generation, model, binding)
             .await?;
         let cache = sessions.cache.write().await;
         if cache.generation != generation {
@@ -569,6 +596,7 @@ impl SessionManager {
                 &ProviderSessionTicket {
                     value: state,
                     credential_revision: account.revision().get(),
+                    credential_binding: Some(*binding),
                     expires_at: expire_at,
                 },
             )
@@ -582,22 +610,60 @@ impl SessionManager {
         account: &ProviderAccount,
         model: &str,
     ) -> Result<Option<ProviderSessionTicket>, String> {
-        let tickets = self.tickets.as_ref().ok_or("State 缓存未配置")?;
+        let tickets = self.tickets.as_ref().ok_or("cache_not_configured")?;
         let ticket = tickets
             .load(account.id(), model)
             .await
-            .map_err(|_| "State 缓存读取失败")?;
-        Ok(ticket.filter(|ticket| {
-            ticket.credential_revision == account.revision().get()
-                && ticket.expires_at > Utc::now().timestamp()
-                && ticket.expires_at <= Utc::now().timestamp() + TTL_SECONDS
-                && valid_state(&ticket.value)
-        }))
+            .map_err(|_| "cache_read_failed")?;
+        let Some(ticket) = ticket else {
+            return Ok(None);
+        };
+        let now = Utc::now().timestamp();
+        if ticket.expires_at <= now {
+            return Err("ticket_expired".to_owned());
+        }
+        if ticket.expires_at > now + TTL_SECONDS || !valid_state(&ticket.value) {
+            return Err("invalid_ticket".to_owned());
+        }
+        if ticket.credential_revision != account.revision().get() {
+            let Some(binding) = ticket.credential_binding else {
+                return Err("legacy_credential_revision_changed".to_owned());
+            };
+            // Cookie 与鉴权共用 CAS 版本；版本变化时只比较实际鉴权材料。
+            let loaded = self
+                .repository
+                .store()
+                .load_current_credential(account.id())
+                .await
+                .map_err(|_| "credential_lookup_failed")?;
+            let current = self
+                .repository
+                .decode_runtime_credential(&loaded)
+                .map_err(|_| "credential_lookup_failed")?;
+            if !eligible(&loaded.account)
+                || !loaded.account.model_access().allows(model)
+                || !managed(&loaded.account, model)
+                || credential_binding(&loaded.account, &current)? != binding
+            {
+                return Err("credential_changed".to_owned());
+            }
+        }
+        Ok(Some(ticket))
     }
 
     /// 选号与发送前共用缺票关闭规则，Redis 不可用也不能裸发。
     pub async fn available(&self, account: &ProviderAccount, model: &str) -> bool {
-        !managed(account, model) || matches!(self.load_ticket(account, model).await, Ok(Some(_)))
+        if !managed(account, model) {
+            return true;
+        }
+        match self.load_ticket(account, model).await {
+            Ok(Some(_)) => true,
+            result => {
+                let reason = result.err().unwrap_or_else(|| "ticket_missing".to_owned());
+                tracing::info!(target: "session_keepalive", account_id = account.id().as_str(), model, reason, "Session ticket unavailable; account/model blocked");
+                false
+            }
+        }
     }
 
     /// 仅改写已选号请求的 State；不接收或替换业务 Client。
@@ -722,4 +788,38 @@ fn managed(account: &ProviderAccount, model: &str) -> bool {
             .session_keepalive_models()
             .iter()
             .any(|selected| selected == model)
+}
+
+// 绑定实际鉴权与安装身份，不绑定 Cookie、名称、额度等可独立变化的事实。
+fn credential_binding(
+    account: &ProviderAccount,
+    credential: &CodexRuntimeCredential,
+) -> Result<[u8; 32], &'static str> {
+    let secret = credential.authentication.oauth().ok_or("账号鉴权不可用")?;
+    let mut digest = Sha256::new();
+    digest.update(b"codex-session-ticket-v1");
+    for value in [
+        account.id().as_str(),
+        account.upstream_user_id().unwrap_or_default(),
+        account.upstream_account_id().unwrap_or_default(),
+        secret.access_token.expose_secret(),
+        credential.installation_id.as_str(),
+        credential
+            .principal
+            .as_ref()
+            .map_or("", |p| p.oauth_subject.as_str()),
+        credential
+            .principal
+            .as_ref()
+            .and_then(|p| p.poid.as_deref())
+            .unwrap_or_default(),
+    ] {
+        digest.update(
+            u64::try_from(value.len())
+                .map_err(|_| "鉴权材料过长")?
+                .to_be_bytes(),
+        );
+        digest.update(value.as_bytes());
+    }
+    Ok(digest.finalize().into())
 }

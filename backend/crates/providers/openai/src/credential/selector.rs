@@ -414,6 +414,11 @@ impl CodexCredentialSelector {
                         None => true,
                     }
                 {
+                    request.attempt.trace().record(
+                        "account.session_state",
+                        serde_json::json!({"accountId": account.id().as_str(), "model": model,
+                            "reason": "session_ticket_unavailable", "policy": "fail_closed"}),
+                    );
                     continue;
                 }
 
