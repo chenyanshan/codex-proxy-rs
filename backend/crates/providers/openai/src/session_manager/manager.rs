@@ -3,9 +3,12 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use chrono::Utc;
-use futures::{StreamExt, future::BoxFuture};
+use futures::{
+    StreamExt,
+    future::{BoxFuture, join_all, select_ok},
+};
 use gateway_admin::{
-    model::accounts::{SessionModelRefresh, SessionStateRefresh},
+    model::accounts::{SessionModelRefresh, SessionRefreshObserver, SessionStateRefresh},
     ports::provider::{ProviderAdminError, ProviderAdminErrorKind},
 };
 use gateway_core::{
@@ -36,8 +39,8 @@ use crate::{
 
 pub const SESSION_KEEPALIVE_MODELS: [&str; 2] = ["gpt-5.6-sol", "gpt-6-astra"];
 const TTL_SECONDS: i64 = 3600;
-const MAX_PROBE_ATTEMPTS: u32 = 3;
-const MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
+const TURN_STATE_LENGTH: usize = 292;
+const PROBE_CONCURRENCY: [usize; 7] = [1, 1, 1, 3, 3, 3, 3];
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HEARTBEAT_BYTES: usize = 64 * 1024;
 
@@ -57,6 +60,7 @@ struct CachedState {
 #[derive(Default)]
 struct SessionCache {
     generation: u64,
+    cancelled: tokio_util::sync::CancellationToken,
     states: HashMap<String, CachedState>,
 }
 
@@ -64,7 +68,7 @@ struct SessionCache {
 struct AccountSessions {
     refresh: Mutex<()>,
     cache: RwLock<SessionCache>,
-    retry_after: Mutex<Option<tokio::time::Instant>>,
+    retry_after: Mutex<HashMap<String, tokio::time::Instant>>,
 }
 
 /// Provider 内自动与手动刷新共享的服务；也可用于显式装配 Provider。
@@ -104,12 +108,22 @@ impl SessionManager {
             let mut cache = sessions.cache.write().await;
             cache.generation = cache.generation.wrapping_add(1);
             cache.states.clear();
+            cache.cancelled.cancel();
+            cache.cancelled = tokio_util::sync::CancellationToken::new();
         }
     }
 
     pub async fn refresh(
         &self,
         account_id: &ProviderAccountId,
+    ) -> Result<SessionStateRefresh, ProviderAdminError> {
+        self.refresh_with_progress(account_id, None).await
+    }
+
+    pub async fn refresh_with_progress(
+        &self,
+        account_id: &ProviderAccountId,
+        observer: Option<SessionRefreshObserver>,
     ) -> Result<SessionStateRefresh, ProviderAdminError> {
         let account = self
             .repository
@@ -146,7 +160,15 @@ impl SessionManager {
             .refresh
             .try_lock()
             .map_err(|_| admin_error(ProviderAdminErrorKind::Conflict, "该账号正在刷新 State"))?;
-        let generation = sessions.cache.read().await.generation;
+        sessions
+            .retry_after
+            .lock()
+            .await
+            .retain(|_, deadline| *deadline > tokio::time::Instant::now());
+        let (generation, cancelled) = {
+            let cache = sessions.cache.read().await;
+            (cache.generation, cache.cancelled.clone())
+        };
         let _capacity = self.capacity.try_acquire().map_err(|_| {
             admin_error(ProviderAdminErrorKind::Conflict, "重写并发已满，请稍后重试")
         })?;
@@ -164,57 +186,47 @@ impl SessionManager {
             account.session_keepalive_models(),
         )
         .map_err(|_| admin_error(ProviderAdminErrorKind::Invalid, "请配置有效的重写模型"))?;
-        let mut models = Vec::with_capacity(account.session_keepalive_models().len());
-        for model in account.session_keepalive_models() {
-            let result = if self
-                .policy
-                .load_session_keepalive_proxy()
-                .await
-                .ok()
-                .flatten()
-                .as_ref()
-                != Some(&proxy)
-            {
-                Err("全局保活已关闭或动态代理已变化，停止本轮重写".to_owned())
-            } else if !account.model_access().allows(model) {
-                Err("该账号未允许此模型".to_owned())
-            } else if sessions
-                .retry_after
-                .lock()
-                .await
-                .is_some_and(|deadline| deadline > tokio::time::Instant::now())
-            {
-                Err("上游要求稍后重试".to_owned())
-            } else {
-                self.heartbeat_with_retry(
-                    &client,
-                    (&account, &proxy),
-                    authorization.expose_secret(),
-                    &credential.installation_id,
-                    model,
-                    &sessions,
-                )
-                .await
-            };
-            let result = match result {
-                Ok(state) => self
-                    .store_refreshed_state(&account, &proxy, &sessions, generation, model, state)
-                    .await
-                    .map_err(str::to_owned),
-                Err(error) => Err(error),
-            };
-            let (refreshed_at, expire_at, error) = match result {
-                Ok(expire_at) => (Some(Utc::now()), Some(expire_at), None),
-                Err(error) => (None, None, Some(error.to_owned())),
-            };
-            tracing::info!(target: "session_keepalive", account_id = account_id.as_str(), model, expire_at, error = error.as_deref(), "Session state cache update result");
-            models.push(SessionModelRefresh {
-                model: model.to_owned(),
-                refreshed_at,
-                expire_at,
-                error,
-            });
-        }
+        // 每个模型拥有独立的重试 future；成功即写缓存，不等待其他模型。
+        // join_all 持有完整 future 树，调用方取消时不会留下脱离生命周期的任务。
+        let models = join_all(account.session_keepalive_models().iter().map(|model| {
+            let account = &account;
+            let proxy = &proxy;
+            let sessions = &sessions;
+            let client = &client;
+            let authorization = &authorization;
+            let installation_id = &credential.installation_id;
+            let observer = &observer;
+            let cancelled = &cancelled;
+            async move {
+                let result = tokio::select! {
+                    biased;
+                    () = cancelled.cancelled() => Err("账号配置已变化，已停止重写".to_owned()),
+                    result = async {
+                        let state = self.refresh_model(
+                            client, account, proxy, authorization.expose_secret(),
+                            installation_id, model, sessions, generation,
+                        ).await?;
+                        self.store_refreshed_state(account, proxy, sessions, generation, model, state).await.map_err(str::to_owned)
+                    } => result,
+                };
+                let (refreshed_at, expire_at, error) = match result {
+                    Ok(expire_at) => (Some(Utc::now()), Some(expire_at), None),
+                    Err(error) => (None, None, Some(error)),
+                };
+                tracing::info!(target: "session_keepalive", account_id = account_id.as_str(), model, expire_at, error = error.as_deref(), "Session state cache update result");
+                let result = SessionModelRefresh {
+                    model: model.to_string(),
+                    refreshed_at,
+                    expire_at,
+                    error,
+                };
+                if let Some(observer) = observer {
+                    observer(result.clone());
+                }
+                result
+            }
+        }))
+        .await;
         Ok(SessionStateRefresh {
             account_id: account_id.as_str().to_owned(),
             models,
@@ -248,82 +260,69 @@ impl SessionManager {
         Ok(client)
     }
 
-    async fn heartbeat_with_retry(
+    #[allow(clippy::too_many_arguments)]
+    async fn refresh_model(
         &self,
         client: &Client,
-        target: (&ProviderAccount, &OutboundProxy),
+        account: &ProviderAccount,
+        proxy: &OutboundProxy,
         authorization: &str,
         installation_id: &str,
         model: &str,
         sessions: &AccountSessions,
+        generation: u64,
     ) -> Result<String, String> {
-        let (account, proxy) = target;
-        for attempt in 1..=MAX_PROBE_ATTEMPTS {
-            // 重试前重读资格，避免管理员停止功能或轮换凭据后继续发送旧请求。
-            let current = self
-                .repository
-                .store()
-                .get_account(account.id())
-                .await
-                .map_err(|_| "重试前读取账号失败".to_owned())?;
-            if !current.as_ref().is_some_and(|current| {
-                eligible(current)
-                    && current.revision() == account.revision()
-                    && current
-                        .session_keepalive_models()
-                        .iter()
-                        .any(|selected| selected == model)
-                    && current.model_access().allows(model)
-            }) || self
-                .policy
-                .load_session_keepalive_proxy()
-                .await
-                .ok()
-                .flatten()
-                .as_ref()
-                != Some(proxy)
+        let mut stage = 0usize;
+        let mut attempt = 1u32;
+        loop {
+            // 无限重试仍须遵守配置变更，不能持续使用旧账号或旧代理。
+            self.validate_refresh_context(account, proxy, sessions, generation, model)
+                .await?;
+            // 冷却属于账号＋模型，取消或配置失效后的新刷新也不能绕过。
+            let cooldown = sessions.retry_after.lock().await.get(model).copied();
+            if let Some(deadline) = cooldown
+                && deadline > tokio::time::Instant::now()
             {
-                return Err("账号或动态代理配置已变化，停止重写重试".to_owned());
+                tokio::time::sleep_until(deadline).await;
+                continue;
             }
-            let error = match self
-                .heartbeat(
+            let concurrency = PROBE_CONCURRENCY[stage];
+            let probes = (0..concurrency).map(|_| {
+                Box::pin(self.heartbeat(
                     client,
                     (account, proxy, attempt),
                     authorization,
                     installation_id,
                     model,
-                    sessions,
-                )
-                .await
-            {
-                Ok(state) => return Ok(state),
-                Err(error) => error,
-            };
-            if attempt == MAX_PROBE_ATTEMPTS {
-                return Err(format!("已尝试 {attempt} 次：{error}"));
+                    &sessions.retry_after,
+                ))
+            });
+            match select_ok(probes).await {
+                Ok((state, remaining)) => {
+                    // 未 spawn 的 HTTP future 在 drop 时立即取消，含正在读取的 SSE。
+                    drop(remaining);
+                    return Ok(state);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        account_id = account.id().as_str(),
+                        model,
+                        concurrency,
+                        error,
+                        "Session heartbeat round failed"
+                    );
+                }
             }
-            let mut jitter = [0u8; 1];
-            let _ = getrandom::fill(&mut jitter);
-            let backoff =
-                Duration::from_millis((1_u64 << (attempt - 1)) * 1000 + u64::from(jitter[0]) * 2);
-            let retry_after = sessions
-                .retry_after
-                .lock()
-                .await
-                .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()))
-                .unwrap_or_default();
-            let delay = backoff.max(retry_after);
-            if delay > MAX_RETRY_WAIT {
-                tracing::info!(target: "session_keepalive", account_id = account.id().as_str(), model, attempt, retry_after_seconds = delay.as_secs(), "Session probe deferred by upstream rate limit");
-                return Err(format!(
-                    "{error}；上游要求 {} 秒后重试，本轮停止",
-                    delay.as_secs().saturating_add(1)
-                ));
+            let mut deadline =
+                tokio::time::Instant::now() + Duration::from_secs([2, 3, 5][stage.min(2)]);
+            // 限流只延长当前模型的等待；并发响应不能缩短已收到的 Retry-After。
+            if let Some(upstream_deadline) = sessions.retry_after.lock().await.get(model).copied() {
+                deadline = deadline.max(upstream_deadline);
             }
-            tracing::info!(target: "session_keepalive", account_id = account.id().as_str(), model, attempt, retry_delay_ms = delay.as_millis(), error, "Retrying session probe");
-            tokio::time::sleep(delay).await;
+            tokio::time::sleep_until(deadline).await;
+            stage = (stage + 1).min(PROBE_CONCURRENCY.len() - 1);
+            attempt = attempt.saturating_add(1);
         }
-        unreachable!("至少执行一次重写")
     }
 
     async fn heartbeat(
@@ -333,7 +332,7 @@ impl SessionManager {
         authorization: &str,
         installation_id: &str,
         model: &str,
-        sessions: &AccountSessions,
+        retry_after: &Mutex<HashMap<String, tokio::time::Instant>>,
     ) -> Result<String, String> {
         let (account, proxy, attempt) = target;
         let probe_id = uuid::Uuid::new_v4().to_string();
@@ -398,15 +397,29 @@ impl SessionManager {
             format!("运维网络请求失败或超时（重写 {probe_id}）")
         })?;
         let status = response.status();
-        log.record("response_headers", json!({"status":status.as_u16(), "headers":diagnostics::headers(response.headers()), "elapsedMs":started.elapsed().as_millis()}));
         if status.as_u16() == 429 {
             let delay =
                 crate::transport::retry_after_seconds(response.headers(), None).unwrap_or(60);
-            *sessions.retry_after.lock().await = tokio::time::Instant::now()
-                .checked_add(Duration::from_secs(delay.min(u64::from(u32::MAX))));
+            let deadline =
+                tokio::time::Instant::now() + Duration::from_secs(delay.min(u64::from(u32::MAX)));
+            let mut current = retry_after.lock().await;
+            current
+                .entry(model.to_owned())
+                .and_modify(|previous| *previous = (*previous).max(deadline))
+                .or_insert(deadline);
         }
-        let state = crate::transport::turn_state(response.headers())
-            .filter(|value| !value.is_empty() && value.len() <= 8192);
+        // 先断言 Header 原始字节长度，不复制、不 trim、不等待响应正文。
+        if let Some(state) = response.headers().get("x-codex-turn-state")
+            && state.as_bytes().len() != TURN_STATE_LENGTH
+        {
+            log.record("invalid_state", json!({"status":status.as_u16(), "stateLength":state.as_bytes().len(), "elapsedMs":started.elapsed().as_millis()}));
+            return Err(format!("上游 State 长度无效（重写 {probe_id}）"));
+        }
+        log.record("response_headers", json!({"status":status.as_u16(), "headers":diagnostics::headers(response.headers()), "elapsedMs":started.elapsed().as_millis()}));
+        let state = crate::transport::turn_state(response.headers());
+        if status.is_success() && state.is_none() {
+            return Err(format!("上游未返回有效 State（重写 {probe_id}）"));
+        }
         let mut bytes = Vec::new();
         let mut decoder = SseEventDecoder::default();
         let mut stream = response.bytes_stream();
@@ -491,15 +504,14 @@ impl SessionManager {
         state.ok_or_else(|| format!("上游未返回有效 State（重写 {probe_id}）"))
     }
 
-    async fn store_refreshed_state(
+    async fn validate_refresh_context(
         &self,
         account: &ProviderAccount,
         proxy: &OutboundProxy,
         sessions: &AccountSessions,
         generation: u64,
         model: &str,
-        state: String,
-    ) -> Result<i64, &'static str> {
+    ) -> Result<(), &'static str> {
         let current = self
             .repository
             .store()
@@ -525,6 +537,24 @@ impl SessionManager {
         if current_proxy.as_ref() != Some(proxy) {
             return Err("运维代理已变化，已丢弃重写结果");
         }
+        if sessions.cache.read().await.generation != generation {
+            return Err("账号配置已变化，已停止探活");
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn store_refreshed_state(
+        &self,
+        account: &ProviderAccount,
+        proxy: &OutboundProxy,
+        sessions: &AccountSessions,
+        generation: u64,
+        model: &str,
+        state: String,
+    ) -> Result<i64, &'static str> {
+        self.validate_refresh_context(account, proxy, sessions, generation, model)
+            .await?;
         let mut cache = sessions.cache.write().await;
         if cache.generation != generation {
             return Err("账号配置已变化，已丢弃重写结果");
@@ -600,7 +630,7 @@ impl SessionManager {
                 // 仍被请求持有或处于冷却期的账号不能换锁；重新启用也须遵守原有边界。
                 || Arc::strong_count(sessions) > 1
                 || sessions.retry_after.try_lock().map_or(true, |retry_after| {
-                    retry_after.is_some_and(|deadline| deadline > tokio::time::Instant::now())
+                    retry_after.values().any(|deadline| *deadline > tokio::time::Instant::now())
                 })
         });
         for account in accounts.iter().filter(|account| eligible(account)) {
@@ -639,8 +669,8 @@ impl DaemonTask for SessionManager {
                     getrandom::fill(&mut bytes)
                         .map_err(|_| WorkerTaskError::safe("session jitter unavailable"))?;
                     let sample = u32::from_le_bytes(bytes);
-                    if sample < u32::MAX - u32::MAX % 481 {
-                        break 3000 + u64::from(sample % 481);
+                    if sample < u32::MAX - u32::MAX % 121 {
+                        break 3180 + u64::from(sample % 121);
                     }
                 };
                 tokio::select! {

@@ -50,6 +50,7 @@ pub trait AccountsService: Send + Sync {
     async fn refresh_session_state(
         &self,
         _account_id: &ProviderAccountId,
+        _observer: Option<crate::model::accounts::SessionRefreshObserver>,
     ) -> Result<crate::model::accounts::SessionStateRefresh, AdminError> {
         Err(AdminError::invalid("当前 Provider 不支持 State 刷新"))
     }
@@ -367,10 +368,11 @@ impl AccountsService for DefaultAccountsService {
     async fn refresh_session_state(
         &self,
         account_id: &ProviderAccountId,
+        observer: Option<crate::model::accounts::SessionRefreshObserver>,
     ) -> Result<crate::model::accounts::SessionStateRefresh, AdminError> {
         let (_, provider) = self.provider_for_account(account_id).await?;
         provider
-            .refresh_session_state(account_id)
+            .refresh_session_state(account_id, observer)
             .await
             .map_err(|error| map_provider_error(error, "session state refresh"))
     }

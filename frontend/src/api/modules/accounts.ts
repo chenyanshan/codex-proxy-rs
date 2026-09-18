@@ -685,3 +685,57 @@ export function refreshAccountSessionState(data: AccountIdParam, options: Reques
     ...options,
   })
 }
+
+export async function streamAccountSessionState(
+  data: AccountIdParam,
+  onModel: (model: SessionStateRefresh['models'][number]) => void,
+  options: RequestOptions = {},
+): Promise<SessionStateRefresh> {
+  const stream = await request<ReadableStream<Uint8Array>>({
+    url: '/api/admin/accounts/session-state/refresh/stream',
+    method: 'POST',
+    data,
+    adapter: 'fetch',
+    responseType: 'stream',
+    headers: { Accept: 'text/event-stream' },
+    ...options,
+    timeout: 0,
+  })
+  const reader = stream.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let eventData = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done)
+        throw new Error('刷新连接已中断，已成功的模型结果保留')
+      buffer += decoder.decode(value, { stream: true })
+      while (buffer.includes('\n')) {
+        const end = buffer.indexOf('\n')
+        const line = buffer.slice(0, end).replace(/\r$/, '')
+        buffer = buffer.slice(end + 1)
+        if (line.startsWith('data:')) {
+          eventData += `${line.slice(5).trimStart()}\n`
+        }
+        else if (line === '' && eventData) {
+          const event = JSON.parse(eventData) as
+            | { type: 'model', data: SessionStateRefresh['models'][number] }
+            | { type: 'complete', data: SessionStateRefresh }
+            | { type: 'error', message?: string }
+          eventData = ''
+          if (event.type === 'model')
+            onModel(event.data)
+          else if (event.type === 'complete')
+            return event.data
+          else if (event.type === 'error')
+            throw new Error(event.message || 'State 刷新失败')
+        }
+      }
+    }
+  }
+  finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
+}

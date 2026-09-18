@@ -169,8 +169,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
     async fn refresh_session_state(
         &self,
         account_id: &ProviderAccountId,
+        observer: Option<gateway_admin::model::accounts::SessionRefreshObserver>,
     ) -> Result<gateway_admin::model::accounts::SessionStateRefresh, ProviderAdminError> {
-        self.sessions.refresh(account_id).await
+        self.sessions
+            .refresh_with_progress(account_id, observer)
+            .await
     }
 
     fn provider_kind(&self) -> &ProviderKind {

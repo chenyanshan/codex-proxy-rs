@@ -309,6 +309,9 @@ pub enum AccountConnectionTestEvent {
 pub type AccountConnectionTestEventStream =
     Pin<Box<dyn Stream<Item = AccountConnectionTestEvent> + Send + 'static>>;
 
+/// 每个模型完成缓存写入或终止后通知调用方，不传递凭证原文。
+pub type SessionRefreshObserver = std::sync::Arc<dyn Fn(SessionModelRefresh) + Send + Sync>;
+
 /// 手动重写的逐模型结果，不承载 State 或鉴权原文。
 #[derive(Debug, Clone)]
 pub struct SessionModelRefresh {

@@ -190,7 +190,7 @@ const {
   reloadAccounts: loadAccounts,
   reloadGroups: loadGroups,
 })
-const { account: stateAccount, open: stateModalOpen, result: stateResult, loading: stateRefreshing, error: stateError, refresh: refreshState } = useAccountSessionState()
+const { account: stateAccount, open: stateModalOpen, result: stateResult, loading: stateRefreshing, error: stateError, refresh: refreshState, cancel: cancelStateRefresh } = useAccountSessionState()
 </script>
 
 <template>
@@ -409,7 +409,7 @@ const { account: stateAccount, open: stateModalOpen, result: stateResult, loadin
       @generate-oauth="handleAuthorizeOAuth"
     />
 
-    <AccountSessionStateModal v-model="stateModalOpen" :account="stateAccount" :result="stateResult" :loading="stateRefreshing" :error="stateError" @retry="refreshState" />
+    <AccountSessionStateModal v-model="stateModalOpen" :account="stateAccount" :result="stateResult" :loading="stateRefreshing" :error="stateError" @retry="refreshState" @cancel="cancelStateRefresh" />
 
     <AccountEditModal
       v-model="showEditModal"

@@ -113,6 +113,7 @@ pub trait ProviderAdmin: Send + Sync {
     async fn refresh_session_state(
         &self,
         _account_id: &ProviderAccountId,
+        _observer: Option<crate::model::accounts::SessionRefreshObserver>,
     ) -> Result<crate::model::accounts::SessionStateRefresh, ProviderAdminError> {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }

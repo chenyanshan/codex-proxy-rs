@@ -132,3 +132,61 @@ async fn manual_state_refresh_requires_admin_and_valid_account_id() {
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     }
 }
+
+#[tokio::test]
+async fn manual_state_stream_checks_auth_and_reports_safe_errors_without_buffering() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (body, authenticated, expected) in [
+        (
+            serde_json::json!({"accountId":"acct_test"}),
+            false,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            serde_json::json!({"accountId":"bad"}),
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            serde_json::json!({"accountId":"acct_test", "token":"rejected"}),
+            true,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            serde_json::json!({"accountId":"acct_test"}),
+            true,
+            StatusCode::OK,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/admin/accounts/session-state/refresh/stream")
+            .header("x-request-id", "req_state_stream")
+            .header(header::CONTENT_TYPE, "application/json");
+        if authenticated {
+            request = request.header(header::COOKIE, "cpr_session=valid-session");
+        }
+        let response = admin::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        if expected == StatusCode::OK {
+            assert_eq!(
+                response.headers()[header::CONTENT_TYPE],
+                "text/event-stream"
+            );
+            assert_eq!(response.headers()["x-accel-buffering"], "no");
+            let body = to_bytes(response.into_body(), 8192).await.unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            let event: serde_json::Value =
+                serde_json::from_str(body.trim().strip_prefix("data: ").unwrap()).unwrap();
+            assert_eq!(event["type"], "error");
+            assert!(event["message"].is_string());
+            assert_eq!(event.as_object().unwrap().len(), 2);
+        }
+    }
+}

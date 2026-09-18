@@ -49,6 +49,10 @@ where
             "/api/admin/accounts/session-state/refresh",
             post(refresh_account_session_state::<S>),
         )
+        .route(
+            "/api/admin/accounts/session-state/refresh/stream",
+            post(stream_account_session_state::<S>),
+        )
         .route("/api/admin/accounts/models", get(account_models::<S>))
         .route(
             "/api/admin/accounts/models/refresh",
@@ -623,21 +627,74 @@ where
     let result = state
         .admin_services()
         .accounts()
-        .refresh_session_state(&account_id)
+        .refresh_session_state(&account_id, None)
         .await
         .map_err(map_service_error)?;
     let models = result
         .models
         .into_iter()
-        .map(|item| {
-            serde_json::json!({
-                "model": item.model, "refreshedAt": item.refreshed_at,
-                "expireAt": item.expire_at, "error": item.error,
-            })
-        })
+        .map(session_model_data)
         .collect::<Vec<_>>();
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(serde_json::json!({"accountId": result.account_id, "models": models})),
+    ))
+}
+
+fn session_model_data(item: gateway_admin::model::accounts::SessionModelRefresh) -> Value {
+    serde_json::json!({
+        "model": item.model, "refreshedAt": item.refreshed_at,
+        "expireAt": item.expire_at, "error": item.error,
+    })
+}
+
+async fn stream_account_session_state<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<AccountActionRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync + 'static,
+{
+    let account_id = request.into_id().map_err(map_wire_error)?;
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let observer: gateway_admin::model::accounts::SessionRefreshObserver =
+        std::sync::Arc::new(move |result| {
+            let _ = sender.send(result);
+        });
+    let refresh = Box::pin(async move {
+        state
+            .admin_services()
+            .accounts()
+            .refresh_session_state(&account_id, Some(observer))
+            .await
+    });
+    // 响应流直接拥有刷新 future；断开连接即取消刷新，不 spawn 后台孤立任务。
+    let stream = futures::stream::unfold(Some((refresh, receiver)), |work| async move {
+        let (mut refresh, mut receiver) = work?;
+        tokio::select! {
+            biased;
+            Some(item) = receiver.recv() => {
+                let value = serde_json::json!({"type": "model", "data": session_model_data(item)});
+                Some((Ok::<_, Infallible>(Event::default().data(value.to_string())), Some((refresh, receiver))))
+            }
+            result = &mut refresh => {
+                let value = match result {
+                    Ok(result) => serde_json::json!({"type": "complete", "data": {
+                        "accountId": result.account_id,
+                        "models": result.models.into_iter().map(session_model_data).collect::<Vec<_>>(),
+                    }}),
+                    Err(error) => serde_json::json!({"type": "error", "message": error.message()}),
+                };
+                Some((Ok(Event::default().data(value.to_string())), None))
+            }
+        }
+    });
+    Ok((
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (HeaderName::from_static("x-accel-buffering"), "no"),
+        ],
+        Sse::new(stream).keep_alive(KeepAlive::default()),
     ))
 }

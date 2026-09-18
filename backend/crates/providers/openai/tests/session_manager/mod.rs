@@ -113,7 +113,16 @@ fn request(model: &str) -> CodexResponsesRequest {
     request
 }
 
-fn success(state: &str) -> ResponseTemplate {
+// 合成凭证只用于验证严格长度合同。
+fn state(label: &str) -> String {
+    format!("{label:A<290}==")
+}
+
+fn success(label: &str) -> ResponseTemplate {
+    response_with_state(&state(label))
+}
+
+fn response_with_state(state: &str) -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("x-codex-turn-state", state)
         .set_body_raw(
@@ -137,4 +146,12 @@ async fn mock_model(proxy: &MockServer, account: &str, model: &str, response: Re
         .respond_with(response)
         .mount(proxy)
         .await;
+}
+
+fn model_match(model: &'static str) -> impl wiremock::Match {
+    move |request: &wiremock::Request| {
+        let bytes = zstd::stream::decode_all(request.body.as_slice()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        body["model"] == model
+    }
 }

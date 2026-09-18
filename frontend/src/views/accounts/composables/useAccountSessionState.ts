@@ -1,7 +1,7 @@
 import type { AccountRow } from '../constants'
 import type { SessionStateRefresh } from '@/api'
-import { shallowRef } from 'vue'
-import { refreshAccountSessionState } from '@/api'
+import { shallowRef, watch } from 'vue'
+import { streamAccountSessionState } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
 
 export function useAccountSessionState() {
@@ -18,7 +18,15 @@ export function useAccountSessionState() {
     open.value = true
     const id = request.start()
     try {
-      const data = await refreshAccountSessionState({ accountId: selected.id }, { signal: request.signal })
+      const data = await streamAccountSessionState({ accountId: selected.id }, (model) => {
+        if (!request.isCurrent(id))
+          return
+        const models = result.value?.models ?? []
+        result.value = {
+          accountId: selected.id,
+          models: [...models.filter(item => item.model !== model.model), model],
+        }
+      }, { signal: request.signal })
       if (request.isCurrent(id))
         result.value = data
     }
@@ -30,5 +38,14 @@ export function useAccountSessionState() {
     }
   }
 
-  return { account, open, result, loading: request.loading, error: request.error, refresh }
+  function cancel() {
+    request.invalidate()
+  }
+
+  watch(open, (visible) => {
+    if (!visible)
+      cancel()
+  })
+
+  return { account, open, result, loading: request.loading, error: request.error, refresh, cancel }
 }

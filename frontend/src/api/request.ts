@@ -90,8 +90,13 @@ export default async function request<T = unknown>(config: RequestConfig): Promi
   catch (error) {
     if (error instanceof ApiError)
       return rejectRequest(error, config, generation)
-    if (axios.isAxiosError(error))
+    if (axios.isAxiosError(error)) {
+      // fetch 流式请求的 HTTP 错误仍按统一 JSON 信封处理，保留会话失效逻辑。
+      if (config.responseType === 'stream' && error.response?.data instanceof ReadableStream) {
+        error.response.data = await new Response(error.response.data).json().catch(() => null)
+      }
       return rejectRequest(normalizeApiError(error), config, generation)
+    }
     throw error
   }
 }
