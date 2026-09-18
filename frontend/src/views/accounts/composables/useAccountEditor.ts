@@ -22,6 +22,7 @@ export function useAccountEditor(options: {
   const notes = shallowRef('')
   const schedulingEnabled = shallowRef(true)
   const enableSessionKeepalive = shallowRef(false)
+  const sessionKeepaliveModels = ref<string[]>([])
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
@@ -71,6 +72,7 @@ export function useAccountEditor(options: {
     proxyId.value = ''
     schedulingEnabled.value = account.enabled
     enableSessionKeepalive.value = account.enableSessionKeepalive
+    sessionKeepaliveModels.value = [...(account.sessionKeepaliveModels ?? ['5.6 sol', '6'])]
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
     modelAccess.value = { ...account.modelAccess, models: [...account.modelAccess.models] }
@@ -97,6 +99,10 @@ export function useAccountEditor(options: {
         return
       }
     }
+    if (editingAccount.value?.provider === 'openai' && (sessionKeepaliveModels.value.length < 1 || sessionKeepaliveModels.value.length > 32)) {
+      toast.warning('请选择 1～32 个探活模型')
+      return
+    }
     const modelError = accountModelAccessError(modelAccess.value)
     if (modelError) {
       toast.warning(modelError)
@@ -119,6 +125,7 @@ export function useAccountEditor(options: {
         outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
         enabled: schedulingEnabled.value,
         enableSessionKeepalive: enableSessionKeepalive.value,
+        sessionKeepaliveModels: editingAccount.value?.provider === 'openai' ? sessionKeepaliveModels.value : undefined,
         concurrencyLimit: scheduling.values.concurrencyLimit,
         weight: scheduling.values.weight,
         modelAccess: modelAccess.value,
@@ -169,6 +176,7 @@ export function useAccountEditor(options: {
     notes,
     schedulingEnabled,
     enableSessionKeepalive,
+    sessionKeepaliveModels,
     concurrencyLimit,
     weight,
     modelAccess,

@@ -314,6 +314,7 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    session_keepalive_enabled: bool,
     disable_fast: bool,
     request_location: Option<crate::account::RequestLocation>,
     request_id: ModelRequestId,
@@ -324,6 +325,12 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub const fn with_session_keepalive_enabled(mut self, enabled: bool) -> Self {
+        self.session_keepalive_enabled = enabled;
+        self
+    }
+
     #[must_use]
     pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
         self.disable_fast = disable_fast;
@@ -345,6 +352,7 @@ impl RequestAttemptContext {
             request_id,
             client_api_key_ref,
             disable_fast: false,
+            session_keepalive_enabled: false,
             request_location: None,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
@@ -410,6 +418,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn disable_fast(&self) -> bool {
         self.request.disable_fast
+    }
+
+    #[must_use]
+    pub const fn session_keepalive_enabled(&self) -> bool {
+        self.request.session_keepalive_enabled
     }
 
     #[must_use]

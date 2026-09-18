@@ -1176,6 +1176,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
         .update_account(
             UpdateAccount {
                 enable_session_keepalive: None,
+                session_keepalive_models: None,
                 notes: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -1258,6 +1259,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     };
     let command = UpdateAccount {
         enable_session_keepalive: None,
+        session_keepalive_models: None,
         notes: None,
         model_access: Default::default(),
         account_id: "acct_proxy".to_owned(),
@@ -1282,6 +1284,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         .update_account(
             UpdateAccount {
                 enable_session_keepalive: None,
+                session_keepalive_models: None,
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Url(
                     gateway_core::account::OutboundProxy::parse(
                         "socks5h://next:new-secret@127.0.0.1:1080",
@@ -1299,6 +1302,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         .update_account(
             UpdateAccount {
                 enable_session_keepalive: None,
+                session_keepalive_models: None,
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Direct),
                 ..command
             },
@@ -1333,6 +1337,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
     };
     let command = UpdateAccount {
         enable_session_keepalive: None,
+        session_keepalive_models: None,
         account_id: "acct_notes".to_owned(),
         notes: Some("  团队备用\n下月续费  ".to_owned()),
         enabled: true,
@@ -1365,6 +1370,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
         .update_account(
             UpdateAccount {
                 enable_session_keepalive: None,
+                session_keepalive_models: None,
                 notes: None,
                 ..command.clone()
             },
@@ -1441,6 +1447,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
         .update_account(
             UpdateAccount {
                 enable_session_keepalive: None,
+                session_keepalive_models: None,
                 notes: Some(" \n\t ".to_owned()),
                 ..command
             },
@@ -1485,6 +1492,7 @@ async fn invalid_account_notes_roll_back_scheduling_revision_and_audit() {
         .update_account(
             UpdateAccount {
                 enable_session_keepalive: None,
+                session_keepalive_models: None,
                 account_id: "acct_notes".to_owned(),
                 notes: Some("备".repeat(501)),
                 enabled: false,
@@ -2001,6 +2009,7 @@ async fn authorization_import_rejects_a_saved_proxy_changed_during_oauth() {
     let saved = proxies
         .create(
             NewProxy {
+                is_dynamic: false,
                 location: None,
                 name: "OAuth".to_owned(),
                 proxy: original.clone(),
@@ -2026,6 +2035,7 @@ async fn authorization_import_rejects_a_saved_proxy_changed_during_oauth() {
     let edited = proxies
         .update(
             UpdateProxy {
+                is_dynamic: None,
                 location: None,
                 id: saved.id.clone(),
                 revision: saved.revision,
@@ -2443,6 +2453,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
             enable_session_keepalive: None,
+            session_keepalive_models: None,
             notes: None,
             model_access: Default::default(),
             outbound_proxy: None,
@@ -2512,6 +2523,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
     .expect("seed group");
     let settings = UpdateAccount {
         enable_session_keepalive: None,
+        session_keepalive_models: None,
         account_id: ACCOUNT_ID.to_owned(),
         notes: Some("统一保存".to_owned()),
         enabled: false,
@@ -2573,6 +2585,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
             2,
             UpdateAccount {
                 enable_session_keepalive: None,
+                session_keepalive_models: None,
                 outbound_proxy: Some(AccountProxySelection::Saved("missing_proxy".to_owned())),
                 ..settings.clone()
             },
@@ -3151,6 +3164,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
         .update_account(
             UpdateAccount {
                 enable_session_keepalive: None,
+                session_keepalive_models: None,
                 notes: None,
                 model_access: Default::default(),
                 account_id: id.as_str().to_owned(),
@@ -3513,6 +3527,13 @@ async fn session_keepalive_defaults_off_and_survives_unrelated_account_updates()
             .update_account(
                 UpdateAccount {
                     enable_session_keepalive: flag,
+                    session_keepalive_models: flag.filter(|flag| *flag).map(|_| {
+                        vec![
+                            "model-a".to_owned(),
+                            "model-b".to_owned(),
+                            "model-c".to_owned(),
+                        ]
+                    }),
                     account_id: id.as_str().to_owned(),
                     notes: None,
                     enabled: true,
@@ -3540,6 +3561,10 @@ async fn session_keepalive_defaults_off_and_survives_unrelated_account_updates()
             .await
             .unwrap();
         assert_eq!(summary[0].enable_session_keepalive, expected);
+        assert_eq!(
+            summary[0].session_keepalive_models,
+            vec!["model-a", "model-b", "model-c"]
+        );
     }
     database.close().await;
 }

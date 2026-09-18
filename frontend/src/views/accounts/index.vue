@@ -175,6 +175,7 @@ const {
   notes: editingNotes,
   schedulingEnabled,
   enableSessionKeepalive,
+  sessionKeepaliveModels,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   modelAccess: editingModelAccess,
@@ -416,6 +417,7 @@ const { account: stateAccount, open: stateModalOpen, result: stateResult, loadin
       v-model:notes="editingNotes"
       v-model:enabled="schedulingEnabled"
       v-model:enable-session-keepalive="enableSessionKeepalive"
+      v-model:session-keepalive-models="sessionKeepaliveModels"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"

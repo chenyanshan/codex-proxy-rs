@@ -128,7 +128,7 @@ impl CodexBackendClient {
         Ok(headers)
     }
 
-    pub(super) fn request_headers_for_http_response(
+    pub(crate) fn request_headers_for_http_response(
         &self,
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,

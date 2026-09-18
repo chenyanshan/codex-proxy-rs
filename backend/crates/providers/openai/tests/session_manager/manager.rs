@@ -1,132 +1,4 @@
-use std::{
-    num::NonZeroU32,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
-
-use chrono::Utc;
-use futures::future::BoxFuture;
-use gateway_admin::ports::provider::ProviderAdminErrorKind;
-use gateway_core::{
-    account::{OutboundProxy, ProviderAccountId},
-    lifecycle::CancellationToken,
-    provider_ports::{ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError},
-    task::DaemonTask,
-};
-use provider_openai::{SESSION_KEEPALIVE_MODELS, SessionManager};
-use provider_openai::{
-    credential::ImportCodexOAuthCredential,
-    transport::{
-        profile::{CodexWireProfile, CodexWireProfileState},
-        protocol::responses::CodexResponsesRequest,
-    },
-};
-use serde_json::json;
-use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{body_partial_json, header, method},
-};
-
-use crate::support::{MemoryAccountStore, profile, secret};
-
-struct Policy {
-    proxy: Mutex<Option<OutboundProxy>>,
-    reads: AtomicUsize,
-}
-impl ProviderRuntimePolicyPort for Policy {
-    fn load_refresh_policy(
-        &self,
-    ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
-        Box::pin(async {
-            ProviderRefreshPolicy::try_new(Duration::from_secs(60), NonZeroU32::new(2).unwrap())
-        })
-    }
-    fn load_oam_proxy(&self) -> BoxFuture<'_, Result<Option<OutboundProxy>, ProviderStoreError>> {
-        self.reads.fetch_add(1, Ordering::SeqCst);
-        let proxy = self.proxy.lock().unwrap().clone();
-        Box::pin(async move { Ok(proxy) })
-    }
-}
-
-async fn fixture(
-    proxy: Option<&str>,
-) -> (Arc<MemoryAccountStore>, Arc<Policy>, Arc<SessionManager>) {
-    let store = Arc::new(MemoryAccountStore::default());
-    for id in ["acct_a", "acct_b"] {
-        store
-            .seed_oauth_credential(ImportCodexOAuthCredential {
-                account_id: id.to_owned(),
-                name: id.to_owned(),
-                secret: secret(id),
-                verified_account: profile(id),
-                next_refresh_at: None,
-                enabled: true,
-            })
-            .await;
-        store.set_session_keepalive(id, true);
-    }
-    let policy = Arc::new(Policy {
-        proxy: Mutex::new(proxy.map(|url| OutboundProxy::parse(url).unwrap())),
-        reads: AtomicUsize::new(0),
-    });
-    let profile = wire_profile();
-    let manager = Arc::new(SessionManager::new(
-        store.repository(),
-        policy.clone(),
-        profile,
-        "http://upstream.invalid/backend-api".to_owned(),
-    ));
-    (store, policy, manager)
-}
-
-fn wire_profile() -> CodexWireProfileState {
-    CodexWireProfileState::new(CodexWireProfile {
-        originator: "codex_cli_rs".to_owned(),
-        codex_version: "0.144.0".to_owned(),
-        desktop_version: "1.0.0".to_owned(),
-        desktop_build: "1".to_owned(),
-        os_type: "linux".to_owned(),
-        os_version: "6.8".to_owned(),
-        arch: "x86_64".to_owned(),
-        terminal: "session-test".to_owned(),
-        residency: None,
-        verified_at: Utc::now(),
-    })
-}
-
-fn request(model: &str) -> CodexResponsesRequest {
-    let mut request = CodexResponsesRequest::from_body(
-        json!({"model":model,"input":[],"client_metadata":{"preserved":"value"}})
-            .as_object()
-            .unwrap()
-            .clone(),
-    );
-    request.turn_state = Some("client-state".to_owned());
-    request
-}
-
-fn success(state: &str) -> ResponseTemplate {
-    ResponseTemplate::new(200)
-        .insert_header("x-codex-turn-state", state)
-        .set_body_raw(
-            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
-            "text/event-stream",
-        )
-}
-
-async fn mock_model(proxy: &MockServer, account: &str, model: &str, response: ResponseTemplate) {
-    Mock::given(method("POST"))
-        .and(header("authorization", format!("Bearer {account}")))
-        .and(body_partial_json(
-            json!({"model":model,"store":false,"stream":true}),
-        ))
-        .respond_with(response)
-        .mount(proxy)
-        .await;
-}
+use super::*;
 
 #[tokio::test]
 async fn refresh_and_rewrite_isolate_every_account_and_model_using_only_oam_proxy() {
@@ -420,6 +292,7 @@ async fn credential_revision_change_prevents_reusing_previous_state() {
         current.access_token_expires_at(),
     )
     .with_session_keepalive(true)
+    .with_session_keepalive_models(vec!["5.6 sol".to_owned(), "6".to_owned()])
     .with_account_facts(
         true,
         current.credential_state(),
@@ -444,13 +317,126 @@ async fn worker_waits_between_fifty_and_fifty_eight_minutes_and_cancels_sleep() 
         tokio::spawn(async move { manager.run(cancellation).await })
     };
     tokio::task::yield_now().await;
-    assert_eq!(policy.reads.load(Ordering::SeqCst), 2);
+    assert_eq!(policy.reads.load(Ordering::SeqCst), 1);
     tokio::time::advance(Duration::from_secs(2999)).await;
     tokio::task::yield_now().await;
-    assert_eq!(policy.reads.load(Ordering::SeqCst), 2);
+    assert_eq!(policy.reads.load(Ordering::SeqCst), 1);
     tokio::time::advance(Duration::from_secs(482)).await;
     tokio::task::yield_now().await;
-    assert_eq!(policy.reads.load(Ordering::SeqCst), 4);
+    assert_eq!(policy.reads.load(Ordering::SeqCst), 2);
     cancellation.cancel();
     task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn selected_models_are_exact_and_support_more_than_two() {
+    let proxy = MockServer::start().await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    let models = vec![
+        "gpt-5.6-sol".to_owned(),
+        "gpt-6-astra".to_owned(),
+        "custom-model".to_owned(),
+    ];
+    store.set_session_models("acct_a", models.clone());
+    for model in &models {
+        mock_model(&proxy, "acct_a", model, success(model)).await;
+    }
+    let result = manager
+        .refresh(&ProviderAccountId::new("acct_a").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(result.models.len(), 3);
+    assert!(result.models.iter().all(|model| model.error.is_none()));
+    for model in &models {
+        let mut req = request(model);
+        manager
+            .rewrite(&store.account("acct_a").unwrap(), &mut req)
+            .await;
+        assert_eq!(req.turn_state.as_deref(), Some(model.as_str()));
+    }
+    store.set_session_models("acct_a", vec!["custom-model".to_owned()]);
+    let mut req = request("gpt-6-astra");
+    manager
+        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .await;
+    assert_eq!(req.turn_state.as_deref(), Some("client-state"));
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn temporary_failure_retries_the_same_model_and_caches_only_success() {
+    let proxy = MockServer::start().await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    store.set_session_models("acct_a", vec!["6".to_owned()]);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let count = attempts.clone();
+    Mock::given(method("POST"))
+        .respond_with(move |_: &wiremock::Request| {
+            if count.fetch_add(1, Ordering::SeqCst) < 2 {
+                ResponseTemplate::new(503)
+            } else {
+                success("retried-state")
+            }
+        })
+        .mount(&proxy)
+        .await;
+    let result = manager
+        .refresh(&ProviderAccountId::new("acct_a").unwrap())
+        .await
+        .unwrap();
+    assert!(result.models[0].error.is_none());
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    let mut req = request("6");
+    manager
+        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .await;
+    assert_eq!(req.turn_state.as_deref(), Some("retried-state"));
+    proxy.reset().await;
+    mock_model(&proxy, "acct_a", "6", ResponseTemplate::new(500)).await;
+    let result = manager
+        .refresh(&ProviderAccountId::new("acct_a").unwrap())
+        .await
+        .unwrap();
+    assert!(
+        result.models[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("已尝试 3 次")
+    );
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 3);
+    let mut req = request("6");
+    manager
+        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .await;
+    assert_eq!(req.turn_state.as_deref(), Some("retried-state"));
+}
+
+#[tokio::test]
+async fn short_retry_after_is_honored_before_retrying() {
+    let proxy = MockServer::start().await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    store.set_session_models("acct_a", vec!["6".to_owned()]);
+    let times = Arc::new(Mutex::new(Vec::new()));
+    let captured = times.clone();
+    Mock::given(method("POST"))
+        .respond_with(move |_: &wiremock::Request| {
+            let mut times = captured.lock().unwrap();
+            times.push(std::time::Instant::now());
+            if times.len() == 1 {
+                ResponseTemplate::new(429).insert_header("retry-after", "2")
+            } else {
+                success("after-rate-limit")
+            }
+        })
+        .mount(&proxy)
+        .await;
+    let result = manager
+        .refresh(&ProviderAccountId::new("acct_a").unwrap())
+        .await
+        .unwrap();
+    assert!(result.models[0].error.is_none());
+    let times = times.lock().unwrap();
+    assert_eq!(times.len(), 2);
+    assert!(times[1].duration_since(times[0]) >= Duration::from_secs(2));
 }

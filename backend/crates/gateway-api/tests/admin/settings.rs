@@ -38,6 +38,7 @@ async fn response_json(response: axum::response::Response) -> Value {
 fn update_body() -> Value {
     json!({
         "oamProxy": "",
+        "sessionKeepaliveEnabled": false,
             "disableFast": false,
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
@@ -105,6 +106,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
 
     let settings = RuntimeSettings {
         oam_proxy: String::new(),
+        session_keepalive_enabled: false,
         disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),
@@ -151,6 +153,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         value,
         json!({
             "oamProxy": "",
+        "sessionKeepaliveEnabled": false,
             "disableFast": false,
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
@@ -206,6 +209,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         .collect();
     let settings = RuntimeSettings {
         oam_proxy: String::new(),
+        session_keepalive_enabled: false,
         disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),

@@ -28,6 +28,7 @@ async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
     let mut saved = proxies
         .create(
             NewProxy {
+                is_dynamic: false,
                 name: "Tokyo".to_owned(),
                 proxy: OutboundProxy::parse("http://127.0.0.1:18080").unwrap(),
                 location: Some(location.clone()),
@@ -64,6 +65,7 @@ async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
     saved = proxies
         .update(
             UpdateProxy {
+                is_dynamic: None,
                 id: saved.id.clone(),
                 revision: saved.revision,
                 name: "Renamed".to_owned(),
@@ -81,6 +83,7 @@ async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
     saved = proxies
         .update(
             UpdateProxy {
+                is_dynamic: None,
                 id: saved.id.clone(),
                 revision: saved.revision,
                 name: saved.name.clone(),
@@ -107,6 +110,7 @@ async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
         proxies
             .update(
                 UpdateProxy {
+                    is_dynamic: None,
                     id: saved.id.clone(),
                     revision: stale_revision,
                     name: saved.name.clone(),
@@ -122,6 +126,7 @@ async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
     proxies
         .update(
             UpdateProxy {
+                is_dynamic: None,
                 id: saved.id.clone(),
                 revision: saved.revision,
                 name: saved.name.clone(),
@@ -170,6 +175,7 @@ fn success() -> ProxyTestResult {
 fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
     UpdateAccount {
         enable_session_keepalive: None,
+        session_keepalive_models: None,
         notes: None,
         model_access: Default::default(),
         account_id: account_id.to_owned(),
@@ -191,6 +197,7 @@ async fn proxy_account_removal_preserves_settings_and_rejects_changed_bindings()
     let saved = store
         .create(
             NewProxy {
+                is_dynamic: false,
                 location: None,
                 name: "解绑测试".to_owned(),
                 proxy: OutboundProxy::parse("http://user:secret@127.0.0.1:17890").unwrap(),
@@ -336,6 +343,7 @@ async fn proxy_accounts_paginate_thousands_of_accounts_and_search_without_loadin
     let saved = store
         .create(
             NewProxy {
+                is_dynamic: false,
                 location: None,
                 name: "分页测试".to_owned(),
                 proxy: OutboundProxy::parse("http://127.0.0.1:17890").unwrap(),
@@ -348,6 +356,7 @@ async fn proxy_accounts_paginate_thousands_of_accounts_and_search_without_loadin
     let empty = store
         .create(
             NewProxy {
+                is_dynamic: false,
                 location: None,
                 name: "无关联账号".to_owned(),
                 proxy: OutboundProxy::parse("http://127.0.0.1:17891").unwrap(),
@@ -515,6 +524,7 @@ async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are
     let saved = store
         .create(
             NewProxy {
+                is_dynamic: false,
                 location: None,
                 name: "导入出口".to_owned(),
                 proxy: OutboundProxy::parse("http://127.0.0.1:8080").unwrap(),
@@ -539,6 +549,7 @@ async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are
         .unwrap();
     let reservation = store.reserve_import(&saved.id).await.unwrap();
     let replacement = UpdateProxy {
+        is_dynamic: None,
         location: None,
         id: saved.id.clone(),
         revision: saved.revision,
@@ -637,6 +648,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let created = store
         .create(
             NewProxy {
+                is_dynamic: false,
                 location: None,
                 name: "Office".to_owned(),
                 proxy: old_proxy.clone(),
@@ -651,6 +663,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
         store
             .create(
                 NewProxy {
+                    is_dynamic: false,
                     location: None,
                     name: "Duplicate".to_owned(),
                     proxy: old_proxy.clone()
@@ -719,6 +732,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let renamed = store
         .update(
             UpdateProxy {
+                is_dynamic: None,
                 id: created.id.clone(),
                 revision: created.revision,
                 location: None,
@@ -737,6 +751,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let edited = store
         .update(
             UpdateProxy {
+                is_dynamic: None,
                 id: created.id.clone(),
                 revision: renamed.revision,
                 location: None,
@@ -911,5 +926,83 @@ async fn migration_backfills_shared_proxies_without_changing_credentials() {
         .unwrap()
         .is_none()
     );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn dynamic_proxy_is_unique_and_cannot_bind_by_id_url_or_import() {
+    let Some(database) = TestDatabase::create("dynamic_isolation").await else {
+        return;
+    };
+    let proxies = PgProxyRepository::new(database.pool.clone());
+    let accounts = PgProviderAccountRepository::new(database.pool.clone());
+    let saved = proxies
+        .create(
+            NewProxy {
+                is_dynamic: true,
+                name: "dynamic".to_owned(),
+                location: None,
+                proxy: OutboundProxy::parse("http://127.0.0.1:8181").unwrap(),
+            },
+            &context(),
+        )
+        .await
+        .unwrap()
+        .record;
+    assert!(saved.is_dynamic);
+    assert!(
+        proxies
+            .create(
+                NewProxy {
+                    is_dynamic: true,
+                    name: "second".to_owned(),
+                    location: None,
+                    proxy: OutboundProxy::parse("http://127.0.0.1:8182").unwrap()
+                },
+                &context()
+            )
+            .await
+            .is_err()
+    );
+    let mut input = account("acct_dynamic", "dynamic isolation");
+    input.outbound_proxy = Some(saved.proxy.clone());
+    assert!(accounts.insert_provider_account(input).await.is_err());
+    assert!(proxies.reserve_import(&saved.id).await.is_err());
+    accounts
+        .insert_provider_account(account("acct_dynamic", "dynamic isolation"))
+        .await
+        .unwrap();
+    let error = admin_account_store(&database.pool)
+        .update_account(
+            update(
+                "acct_dynamic",
+                AccountProxySelection::Saved(saved.id.clone()),
+            ),
+            &context(),
+        )
+        .await;
+    assert!(error.is_err());
+    let saved = proxies
+        .record_test(&saved.id, saved.revision, success(), &context())
+        .await
+        .unwrap();
+    assert!(saved.last_test.unwrap().success);
+    let changed = proxies
+        .update(
+            UpdateProxy {
+                id: saved.id,
+                revision: saved.revision,
+                name: saved.name,
+                is_dynamic: None,
+                location: None,
+                proxy: Some(OutboundProxy::parse("http://127.0.0.1:8183").unwrap()),
+            },
+            &context(),
+        )
+        .await
+        .unwrap()
+        .record;
+    assert!(changed.is_dynamic);
+    assert!(changed.last_test.is_none());
     database.close().await;
 }

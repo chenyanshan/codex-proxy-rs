@@ -536,6 +536,7 @@ impl ProviderCandidate {
 /// 一次请求冻结的 Provider 尝试顺序。
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
+    session_keepalive_enabled: bool,
     disable_fast: bool,
     request_location: Option<crate::account::RequestLocation>,
     config_revision: ConfigRevision,
@@ -547,6 +548,11 @@ pub struct RoutingPlan {
 }
 
 impl RoutingPlan {
+    #[must_use]
+    pub const fn session_keepalive_enabled(&self) -> bool {
+        self.session_keepalive_enabled
+    }
+
     #[must_use]
     pub const fn disable_fast(&self) -> bool {
         self.disable_fast

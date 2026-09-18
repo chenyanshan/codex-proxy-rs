@@ -18,6 +18,7 @@ pub use gateway_core::account::RotationStrategy;
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
     pub oam_proxy: String,
+    pub session_keepalive_enabled: bool,
     pub disable_fast: bool,
     pub config_revision: Revision,
     pub request_location_enabled: bool,
@@ -51,6 +52,8 @@ pub struct RuntimeSettings {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
     pub oam_proxy: Option<String>,
+    pub session_keepalive_enabled: Option<bool>,
+    pub session_keepalive_risk_confirmed: bool,
     pub disable_fast: Option<bool>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,

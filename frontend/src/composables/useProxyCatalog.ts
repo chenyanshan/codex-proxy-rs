@@ -16,7 +16,7 @@ export function useProxyCatalog() {
       for (let page = 2; page <= first.page.totalPages; page += 1) {
         items.push(...(await getProxies({ page, pageSize: 200 })).items)
       }
-      proxies.value = items
+      proxies.value = items.filter(proxy => !proxy.isDynamic)
     }
     catch {}
     finally {

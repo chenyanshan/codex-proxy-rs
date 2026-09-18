@@ -724,6 +724,7 @@ const fn status_projection(status: AccountStatus) -> AccountStatusProjection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccount {
     enable_session_keepalive: bool,
+    session_keepalive_models: Vec<String>,
     id: ProviderAccountId,
     provider: ProviderKind,
     name: String,
@@ -749,6 +750,17 @@ pub struct ProviderAccount {
 }
 
 impl ProviderAccount {
+    #[must_use]
+    pub fn session_keepalive_models(&self) -> &[String] {
+        &self.session_keepalive_models
+    }
+
+    #[must_use]
+    pub fn with_session_keepalive_models(mut self, models: Vec<String>) -> Self {
+        self.session_keepalive_models = models;
+        self
+    }
+
     #[must_use]
     pub const fn enable_session_keepalive(&self) -> bool {
         self.enable_session_keepalive
@@ -783,6 +795,7 @@ impl ProviderAccount {
             revision,
             enabled: true,
             enable_session_keepalive: false,
+            session_keepalive_models: Vec::new(),
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
             model_access: super::AccountModelAccess::all(),
@@ -1386,4 +1399,22 @@ pub struct AccountStateChange {
     /// 供管理端展示的错误消息；结构化上游失败应保留原始 message，不能写入整个正文。
     /// 刷新成功或其他无失败事实的 Ready 写入必须清空。
     pub message: Option<String>,
+}
+
+/// 探活逐模型发请求，限制单账号规模并拒绝重复 ID，防止误配放大调用。
+pub fn validate_session_keepalive_models(models: &[String]) -> Result<(), &'static str> {
+    if models.is_empty()
+        || models.len() > 32
+        || models.iter().any(|m| {
+            m.is_empty() || m.len() > 128 || m.trim() != m || m.chars().any(char::is_control)
+        })
+        || models
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != models.len()
+    {
+        return Err("探活模型需为 1 至 32 个不重复的有效模型 ID");
+    }
+    Ok(())
 }

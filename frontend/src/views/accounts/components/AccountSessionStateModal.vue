@@ -13,14 +13,13 @@ defineProps<{
 }>()
 const emit = defineEmits<{ retry: [account: AccountRow] }>()
 const open = defineModel<boolean>({ required: true })
-const modelNames = ['5.6 sol', '6']
 </script>
 
 <template>
   <BaseModal v-model="open" title="刷新 State" size="md" :dismissible="!loading">
     <div class="grid gap-4">
       <p class="m-0 text-cp text-cp-text-secondary">
-        {{ account?.name }} · 分别刷新两个模型的 State，成功后有效期为 60 分钟。
+        {{ account?.name }} · 通过动态代理向每个已选模型发送 hi 并提取 State，成功后有效期为 60 分钟。失败会自动重试，单个模型最多尝试 3 次。
       </p>
       <p v-if="loading" role="status" class="m-0 text-cp text-cp-text-secondary">
         正在刷新，请稍候…
@@ -28,7 +27,7 @@ const modelNames = ['5.6 sol', '6']
       <p v-if="error" role="alert" class="m-0 text-cp text-cp-error">
         {{ error }}
       </p>
-      <div v-for="model in result?.models ?? modelNames.map(model => ({ model, error: null, expireAt: null, refreshedAt: null }))" :key="model.model" class="grid gap-2 rounded-cp bg-cp-fill-quaternary p-4">
+      <div v-for="model in result?.models ?? (account?.sessionKeepaliveModels ?? []).map(model => ({ model, error: null, expireAt: null, refreshedAt: null }))" :key="model.model" class="grid gap-2 rounded-cp bg-cp-fill-quaternary p-4">
         <div class="flex items-center justify-between gap-3">
           <span class="font-mono text-cp font-medium text-cp-text">{{ model.model }}</span>
           <span class="text-cp-sm" :class="model.error ? 'text-cp-error' : model.expireAt ? 'text-cp-success' : 'text-cp-text-tertiary'">

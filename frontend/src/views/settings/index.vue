@@ -142,7 +142,7 @@ onMounted(() => {
           v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
           v-model:request-interval-ms="requestIntervalMsValue"
         />
-        <SessionKeepaliveCard v-model="form.oamProxy" :disabled="saving || loading || !!error" />
+        <SessionKeepaliveCard v-model="form.sessionKeepaliveEnabled" :disabled="saving || loading || !!error" />
         <TokenRefreshCard v-model:refresh-margin-seconds="refreshMarginSecondsValue" v-model:refresh-concurrency="refreshConcurrencyValue" />
         <ResponseBodyLimitCard v-model="responsesMaxDecompressedBodyMiBValue" />
         <RequestQueueCard

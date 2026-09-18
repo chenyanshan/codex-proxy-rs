@@ -469,7 +469,8 @@ fn disable_fast_uses_bound_groups_and_global_policy_without_changing_account_sco
                     revision(1),
                     revision(1),
                     SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
-                        .with_disable_fast(global),
+                        .with_disable_fast(global)
+                        .with_session_keepalive_enabled(global),
                     vec![SnapshotClientPolicyFacts::new(
                         ClientApiKeyId::new("key_fast_policy").unwrap(),
                         PlaintextClientApiKey::new("sk_fast_policy").unwrap(),
@@ -525,6 +526,7 @@ fn disable_fast_uses_bound_groups_and_global_policy_without_changing_account_sco
                         &Default::default(),
                     )
                     .unwrap();
+                assert_eq!(plan.session_keepalive_enabled(), global);
                 assert_eq!(
                     plan.disable_fast(),
                     global || bound,

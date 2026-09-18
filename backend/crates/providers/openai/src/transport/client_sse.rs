@@ -46,6 +46,24 @@ use crate::transport::{
 use super::client::*;
 
 impl CodexBackendClient {
+    /// 心跳与业务复用相同 HTTP 编码；调用方各自持有独立 Client，避免混用出口。
+    pub(crate) fn build_http_sse_request(
+        &self,
+        headers: reqwest::header::HeaderMap,
+        body: Vec<u8>,
+    ) -> CodexClientResult<reqwest::Request> {
+        let endpoint = endpoint_url(&self.base_url, self.protocol.responses_path());
+        let mut outbound = self.client.post(endpoint).headers(headers);
+        let body = if self.protocol == OpenAiUpstreamProtocol::Codex {
+            outbound = outbound.header(CONTENT_ENCODING, HeaderValue::from_static("zstd"));
+            zstd::stream::encode_all(std::io::Cursor::new(body), 3)
+                .map_err(CodexClientError::RequestCompression)?
+        } else {
+            body
+        };
+        Ok(outbound.body(body).build()?)
+    }
+
     /// 构造客户端。
     pub fn new(
         client: Client,
@@ -96,7 +114,6 @@ impl CodexBackendClient {
         upstream_body.insert("stream".to_owned(), serde_json::Value::Bool(true));
         let body =
             serde_json::to_vec(&upstream_body).map_err(CodexClientError::RequestBodyEncode)?;
-        let endpoint = endpoint_url(&self.base_url, self.protocol.responses_path());
         let trace = context
             .trace
             .cloned()
@@ -112,15 +129,8 @@ impl CodexBackendClient {
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
         trace.capture("upstream.request.body", &body);
-        let mut outbound = self.client.post(endpoint).headers(headers);
-        let body = if self.protocol == OpenAiUpstreamProtocol::Codex {
-            outbound = outbound.header(CONTENT_ENCODING, HeaderValue::from_static("zstd"));
-            zstd::stream::encode_all(std::io::Cursor::new(body), 3)
-                .map_err(CodexClientError::RequestCompression)?
-        } else {
-            body
-        };
-        let response = outbound.body(body).send().await?;
+        let request = self.build_http_sse_request(headers, body)?;
+        let response = self.client.execute(request).await?;
         let upstream_headers_ms = elapsed_duration_millis(headers_started_at.elapsed());
         let http_version = http_version_name(response.version()).to_string();
         let status = response.status();

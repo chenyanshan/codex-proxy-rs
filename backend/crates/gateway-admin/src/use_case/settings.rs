@@ -67,11 +67,36 @@ impl SettingsService for DefaultSettingsService {
         command: ReplaceRuntimeSettings,
     ) -> Result<RuntimeSettings, AdminError> {
         validate_settings(&command)?;
+        if command.session_keepalive_enabled == Some(true)
+            && !command.session_keepalive_risk_confirmed
+        {
+            return Err(AdminError::invalid(
+                "请先确认会话保活可能导致账户异常的风险",
+            ));
+        }
+        if command
+            .oam_proxy
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Err(AdminError::invalid("请在代理管理中配置并测试动态代理"));
+        }
+        let enabling_keepalive = command.session_keepalive_enabled == Some(true);
         let settings = self
             .store
             .replace_runtime_settings(command, context)
             .await
-            .map_err(|error| map_store_error(error, "runtime settings"))?;
+            .map_err(|error| {
+                if enabling_keepalive
+                    && error.kind() == crate::ports::store::AdminStoreErrorKind::Invalid
+                {
+                    AdminError::invalid(
+                        "开启失败，请确认已保存唯一动态代理且测试通过，并检查设置参数",
+                    )
+                } else {
+                    map_store_error(error, "runtime settings")
+                }
+            })?;
         publish_committed(self.snapshot.as_ref(), settings.config_revision).await?;
         Ok(settings)
     }

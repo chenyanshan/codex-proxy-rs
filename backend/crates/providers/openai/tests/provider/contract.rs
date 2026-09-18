@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{self, Write};
 use std::num::NonZeroU32;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -56,7 +55,6 @@ use tokio::{
 };
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
-use tracing_subscriber::fmt::MakeWriter;
 use wiremock::matchers::{body_bytes, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -271,44 +269,6 @@ const CAPTURE_COMPLETED_SSE: &str = concat!(
     "event: response.completed\n",
     "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_scope_capture\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
 );
-
-#[derive(Clone, Default)]
-struct CapturedLogs {
-    bytes: Arc<Mutex<Vec<u8>>>,
-}
-
-impl CapturedLogs {
-    fn json_events(&self) -> Vec<Value> {
-        let bytes = self.bytes.lock().expect("captured logs lock").clone();
-        String::from_utf8(bytes)
-            .expect("captured logs are UTF-8")
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("captured log is JSON"))
-            .collect()
-    }
-}
-
-impl<'writer> MakeWriter<'writer> for CapturedLogs {
-    type Writer = Self;
-
-    fn make_writer(&'writer self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-impl Write for CapturedLogs {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.bytes
-            .lock()
-            .map_err(|_| io::Error::other("captured logs lock poisoned"))?
-            .extend_from_slice(buffer);
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
 
 fn selected_account_log_fields<'events>(
     events: &'events [Value],
@@ -4474,18 +4434,7 @@ async fn account_selection_log_should_include_affinity_observation_fields() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_affinity").await;
     let provider = provider_with_affinity(&store, Arc::new(MemorySessionAffinity::default()));
-    let captured = CapturedLogs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .without_time()
-        .with_ansi(false)
-        .with_target(false)
-        .with_writer(captured.clone())
-        .finish();
-    // 该 integration test binary 没有其他 subscriber；全局安装可避免并行测试切换
-    // thread-local dispatcher 时重建 tracing callsite interest 所产生的竞争。
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("install affinity observation log subscriber");
+    let captured = crate::support::capture_logs();
 
     for (request_id, prompt_cache_key, session_id) in [
         (

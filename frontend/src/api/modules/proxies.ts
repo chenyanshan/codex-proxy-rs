@@ -13,6 +13,7 @@ export interface OutboundProxyTest {
 }
 
 export interface OutboundProxyRecord {
+  isDynamic: boolean
   location: RequestLocation | null
   id: string
   name: string
@@ -79,7 +80,7 @@ export function getProxies(data: { page: number, pageSize: number, search?: stri
   })
 }
 
-export function createProxy(data: { name: string, proxyUrl: string, location?: RequestLocation | null }) {
+export function createProxy(data: { isDynamic?: boolean, name: string, proxyUrl: string, location?: RequestLocation | null }) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/create',
     method: 'POST',
@@ -87,7 +88,7 @@ export function createProxy(data: { name: string, proxyUrl: string, location?: R
   })
 }
 
-export function updateProxy(data: { id: string, revision: number, name: string, proxyUrl?: string, location?: RequestLocation | null }) {
+export function updateProxy(data: { isDynamic?: boolean, id: string, revision: number, name: string, proxyUrl?: string, location?: RequestLocation | null }) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/update',
     method: 'POST',

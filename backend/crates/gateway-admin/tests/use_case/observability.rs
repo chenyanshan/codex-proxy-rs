@@ -754,6 +754,7 @@ impl SettingsStore for FixtureSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             oam_proxy: String::new(),
+            session_keepalive_enabled: false,
             disable_fast: false,
             request_location_enabled: false,
             request_location: Default::default(),

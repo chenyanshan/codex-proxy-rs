@@ -10,6 +10,7 @@ use super::TestDatabase;
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
         oam_proxy: None,
+        session_keepalive_enabled: None,
         disable_fast: None,
         request_location_enabled: false,
         request_location: Default::default(),
@@ -459,62 +460,84 @@ async fn disable_fast_persists_and_omitted_updates_preserve_the_restriction() {
 }
 
 #[test]
-fn oam_proxy_should_reject_invalid_urls_without_disclosing_credentials() {
-    let mut settings = settings_with_margin(3_600);
+fn legacy_oam_setting_rejects_nonempty_urls_without_disclosing_credentials() {
+    let mut settings = settings_with_margin(3600);
     settings.oam_proxy = Some("https://test-user:test-secret@proxy.invalid:8181".to_owned());
-    assert!(settings.validate().is_ok());
     assert!(!format!("{settings:?}").contains("test-secret"));
-    settings.oam_proxy = Some("https://test-user:test-secret@proxy.invalid:8181/path".to_owned());
-    let error = settings.validate().expect_err("reject proxy with path");
+    let error = settings.validate().unwrap_err();
     assert!(!error.to_string().contains("test-secret"));
+    settings.oam_proxy = Some(String::new());
+    settings.validate().unwrap();
 }
 
 #[tokio::test]
-async fn oam_proxy_should_default_empty_preserve_omission_and_allow_explicit_clear() {
-    let Some(database) = TestDatabase::create("oam_proxy").await else {
+async fn keepalive_requires_tested_dynamic_proxy_and_defaults_off() {
+    use gateway_core::provider_ports::ProviderRuntimePolicyPort;
+    let Some(database) = TestDatabase::create("keepalive_gate").await else {
         return;
     };
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     assert!(
-        repository
+        !repository
             .load_runtime_settings()
             .await
-            .expect("load defaults")
-            .oam_proxy
-            .is_empty()
+            .unwrap()
+            .session_keepalive_enabled
     );
-    let mut update = settings_with_margin(3_600);
-    update.oam_proxy = Some("http://test-user:test-secret@proxy.invalid:8181".to_owned());
-    repository
-        .update_runtime_settings(update)
-        .await
-        .expect("save proxy");
-    repository
-        .update_runtime_settings(settings_with_margin(1_800))
-        .await
-        .expect("save unrelated field");
-    let settings = repository
-        .load_runtime_settings()
-        .await
-        .expect("reload proxy");
-    assert_eq!(
-        settings.oam_proxy,
-        "http://test-user:test-secret@proxy.invalid:8181"
-    );
-    assert!(!format!("{settings:?}").contains("test-secret"));
-    let mut update = settings_with_margin(1_800);
-    update.oam_proxy = Some(String::new());
-    repository
-        .update_runtime_settings(update)
-        .await
-        .expect("clear proxy");
+    assert!(repository.load_oam_proxy().await.unwrap().is_none());
+    let mut enabled = settings_with_margin(3600);
+    enabled.session_keepalive_enabled = Some(true);
     assert!(
         repository
+            .update_runtime_settings(enabled.clone())
+            .await
+            .is_err()
+    );
+    sqlx::query("insert into outbound_proxies (id, name, proxy_url, is_dynamic) values ('dynamic', 'test', 'http://127.0.0.1:8181', true)")
+        .execute(&database.pool).await.unwrap();
+    assert!(
+        repository
+            .update_runtime_settings(enabled.clone())
+            .await
+            .is_err()
+    );
+    sqlx::query("update outbound_proxies set last_test_success = true where id = 'dynamic'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    repository.update_runtime_settings(enabled).await.unwrap();
+    assert_eq!(
+        repository
+            .load_oam_proxy()
+            .await
+            .unwrap()
+            .unwrap()
+            .expose_url(),
+        "http://127.0.0.1:8181/"
+    );
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    assert!(
+        PgRuntimeSnapshotRepository::new(database.pool.clone())
+            .load_runtime_snapshot()
+            .await
+            .unwrap()
+            .settings
+            .session_keepalive_enabled
+    );
+    sqlx::query("update outbound_proxies set last_test_success = false where id = 'dynamic'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(repository.load_oam_proxy().await.unwrap().is_none());
+    let mut disabled = settings_with_margin(3600);
+    disabled.session_keepalive_enabled = Some(false);
+    repository.update_runtime_settings(disabled).await.unwrap();
+    assert!(
+        !repository
             .load_runtime_settings()
             .await
-            .expect("reload cleared proxy")
-            .oam_proxy
-            .is_empty()
+            .unwrap()
+            .session_keepalive_enabled
     );
     database.close().await;
 }

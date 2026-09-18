@@ -111,7 +111,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let rows = sqlx::query(
             "select location_country, location_region, location_city, location_timezone, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, enable_session_keepalive, concurrency_limit, weight, model_access_json, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, enable_session_keepalive, session_keepalive_models, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
@@ -575,6 +575,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     &mut transaction,
                     ids,
                     settings.enable_session_keepalive,
+                    settings.session_keepalive_models.as_deref(),
                 )
                 .await?;
                 update_provider_accounts_scheduling_in_transaction(
@@ -632,6 +633,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &mut transaction,
                 &command.account_ids,
                 command.enable_session_keepalive,
+                command.session_keepalive_models.as_deref(),
             )
             .await?;
             update_provider_accounts_scheduling_in_transaction(
@@ -1149,13 +1151,23 @@ async fn update_session_keepalive_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     account_ids: &[String],
     enabled: Option<bool>,
+    models: Option<&[String]>,
 ) -> StoreResult<()> {
-    if let Some(enabled) = enabled {
+    if enabled.is_some() || models.is_some() {
+        if let Some(models) = models {
+            gateway_core::account::validate_session_keepalive_models(models).map_err(|_| {
+                StoreError::InvalidData {
+                    entity: "session keepalive models",
+                    message: "invalid models".to_owned(),
+                }
+            })?;
+        }
         sqlx::query(
-            "update provider_accounts set enable_session_keepalive = $2 where id = any($1::text[])",
+            "update provider_accounts set enable_session_keepalive = coalesce($2, enable_session_keepalive), session_keepalive_models = coalesce($3, session_keepalive_models) where id = any($1::text[])",
         )
         .bind(account_ids)
         .bind(enabled)
+        .bind(models)
         .execute(&mut **transaction)
         .await
         .map_err(|_| postgres_unavailable("update session keepalive"))?;

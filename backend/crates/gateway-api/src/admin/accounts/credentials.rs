@@ -215,6 +215,7 @@ impl CompleteAccountAuthorizationRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateAccountRequest {
     pub enable_session_keepalive: Option<bool>,
+    pub session_keepalive_models: Option<Vec<String>>,
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
     pub account_id: String,
@@ -239,8 +240,13 @@ impl UpdateAccountRequest {
 
     pub(super) fn into_command(self) -> Result<UpdateAccount, WireValidationError> {
         self.validate()?;
+        if let Some(models) = &self.session_keepalive_models {
+            gateway_core::account::validate_session_keepalive_models(models)
+                .map_err(|_| WireValidationError::new("sessionKeepaliveModels"))?;
+        }
         Ok(UpdateAccount {
             enable_session_keepalive: self.enable_session_keepalive,
+            session_keepalive_models: self.session_keepalive_models,
             outbound_proxy: super::wire::proxy_selection(
                 self.outbound_proxy_id,
                 self.outbound_proxy_url,

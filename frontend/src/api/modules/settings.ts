@@ -5,7 +5,7 @@ import request from '../request'
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
 export interface RuntimeSettings {
-  oamProxy: string
+  sessionKeepaliveEnabled: boolean
   disableFast: boolean
   requestLocationEnabled: boolean
   requestLocation: RequestLocation
@@ -74,7 +74,7 @@ export function getSettings(options: RequestOptions = {}) {
   })
 }
 
-type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt'>
+type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt'> & { sessionKeepaliveRiskConfirmed?: boolean }
 
 export function updateSettings(data: UpdateSettingsParam) {
   return request<RuntimeSettings>({

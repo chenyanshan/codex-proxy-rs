@@ -163,6 +163,7 @@ impl ProxyStore for MemoryProxies {
         _: &MutationContext,
     ) -> AdminStoreResult<ProxyMutation> {
         let record = ProxyRecord {
+            is_dynamic: false,
             location: command.location,
             id: "proxy_test".to_owned(),
             name: command.name,

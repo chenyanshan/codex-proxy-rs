@@ -7,8 +7,11 @@ Dedicated PostgreSQL 17 and Redis configured for workspace tests.
 
 Current workspace:
   cargo test --manifest-path backend/Cargo.toml --workspace --test main --no-fail-fast --locked
-  Provider OpenAI: 685 tests; 677 passed, 8 failed.
-  New session_manager tests: 10 passed.
+  Provider OpenAI: 690 tests; 682 passed, 8 failed.
+  Session manager tests: 15 passed.
+  Workspace: 2416 passed, 8 failed; RUST_TEST_THREADS=4.
+  Gateway App 42, Admin 173, API 369, Core 362, Host 77,
+  Protocol 63, Store 242, OpenAI 682, xAI 406 passed.
 
 Unmodified baseline b689a772c83e1360e3df1766bc6dfc539e32c43a:
   cargo test --manifest-path backend/Cargo.toml -p provider-openai --test main --locked

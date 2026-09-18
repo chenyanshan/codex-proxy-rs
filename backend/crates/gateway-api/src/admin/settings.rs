@@ -35,6 +35,7 @@ pub type ModelMappings = BTreeMap<String, String>;
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
     pub oam_proxy: String,
+    pub session_keepalive_enabled: bool,
     pub disable_fast: bool,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -68,6 +69,9 @@ pub struct RuntimeSettingsView {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
     pub oam_proxy: Option<String>,
+    pub session_keepalive_enabled: Option<bool>,
+    #[serde(default)]
+    pub session_keepalive_risk_confirmed: bool,
     pub disable_fast: Option<bool>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -180,6 +184,8 @@ impl UpdateRuntimeSettingsRequest {
         self.validate()?;
         Ok(ReplaceRuntimeSettings {
             oam_proxy: self.oam_proxy,
+            session_keepalive_enabled: self.session_keepalive_enabled,
+            session_keepalive_risk_confirmed: self.session_keepalive_risk_confirmed,
             disable_fast: self.disable_fast,
             request_location_enabled: self.request_location_enabled,
             request_location: self
@@ -224,6 +230,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
         Self {
             disable_fast: settings.disable_fast,
             oam_proxy: settings.oam_proxy,
+            session_keepalive_enabled: settings.session_keepalive_enabled,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
             model_mappings: wire_model_mappings(settings.model_mappings),

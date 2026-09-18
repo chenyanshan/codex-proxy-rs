@@ -521,7 +521,9 @@ impl Provider for CodexProvider {
             lease.installation_id(),
             account_scope,
         );
-        if let Some(sessions) = &self.sessions {
+        if context.session_keepalive_enabled()
+            && let Some(sessions) = &self.sessions
+        {
             sessions
                 .rewrite(lease.account(), &mut upstream_request)
                 .await;

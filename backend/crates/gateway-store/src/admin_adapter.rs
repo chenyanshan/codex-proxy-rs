@@ -40,6 +40,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
         let replacement = postgres::ControlPlaneReplacement {
             settings: postgres::RuntimeSettingsUpdate {
                 oam_proxy: command.oam_proxy,
+                session_keepalive_enabled: command.session_keepalive_enabled,
                 admin_api_key: current.settings.admin_api_key,
                 refresh_margin_seconds: command.refresh_margin_seconds,
                 refresh_concurrency: command.refresh_concurrency,
@@ -77,6 +78,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 vec![
                     "disable_fast".to_owned(),
                     "oam_proxy".to_owned(),
+                    "session_keepalive_enabled".to_owned(),
                     "request_location_enabled".to_owned(),
                     "request_location_json".to_owned(),
                     "model_mappings_json".to_owned(),
@@ -187,6 +189,7 @@ pub(crate) fn admin_runtime_settings(
         .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
         oam_proxy: settings.oam_proxy,
+        session_keepalive_enabled: settings.session_keepalive_enabled,
         config_revision: admin_revision(settings.config_revision)?,
         disable_fast: settings.disable_fast,
         request_location_enabled: settings.request_location_enabled,

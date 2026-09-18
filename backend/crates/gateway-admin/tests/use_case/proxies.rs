@@ -124,6 +124,7 @@ async fn authorization_uses_selected_proxy_regardless_of_probe_status() {
                 .accounts(FakeAccountStore::new(kind, events.clone()))
                 .proxies(Arc::new(TestProxies {
                     record: Some(ProxyRecord {
+                        is_dynamic: false,
                         location: None,
                         id: "proxy_oauth".to_owned(),
                         name: "授权出口".to_owned(),
