@@ -55,9 +55,15 @@ struct CachedState {
 }
 
 #[derive(Default)]
+struct SessionCache {
+    generation: u64,
+    states: HashMap<String, CachedState>,
+}
+
+#[derive(Default)]
 struct AccountSessions {
     refresh: Mutex<()>,
-    states: RwLock<HashMap<String, CachedState>>,
+    cache: RwLock<SessionCache>,
     retry_after: Mutex<Option<tokio::time::Instant>>,
 }
 
@@ -91,9 +97,14 @@ impl SessionManager {
         }
     }
 
-    /// 失效时移除当前代次；旧重写持有的 Arc 不能再写回新代次缓存。
+    /// 只失效缓存代次，保留账号级刷新互斥与上游冷却，避免配置编辑绕过它们。
     pub async fn invalidate(&self, account_id: &ProviderAccountId) {
-        self.accounts.write().await.remove(account_id);
+        let accounts = self.accounts.read().await;
+        if let Some(sessions) = accounts.get(account_id) {
+            let mut cache = sessions.cache.write().await;
+            cache.generation = cache.generation.wrapping_add(1);
+            cache.states.clear();
+        }
     }
 
     pub async fn refresh(
@@ -135,6 +146,7 @@ impl SessionManager {
             .refresh
             .try_lock()
             .map_err(|_| admin_error(ProviderAdminErrorKind::Conflict, "该账号正在刷新 State"))?;
+        let generation = sessions.cache.read().await.generation;
         let _capacity = self.capacity.try_acquire().map_err(|_| {
             admin_error(ProviderAdminErrorKind::Conflict, "重写并发已满，请稍后重试")
         })?;
@@ -179,7 +191,7 @@ impl SessionManager {
                 };
             let result = match result {
                 Ok(state) => self
-                    .store_refreshed_state(&account, &proxy, &sessions, model, state)
+                    .store_refreshed_state(&account, &proxy, &sessions, generation, model, state)
                     .await
                     .map_err(str::to_owned),
                 Err(error) => Err(error),
@@ -469,7 +481,8 @@ impl SessionManager {
         &self,
         account: &ProviderAccount,
         proxy: &OutboundProxy,
-        sessions: &Arc<AccountSessions>,
+        sessions: &AccountSessions,
+        generation: u64,
         model: &str,
         state: String,
     ) -> Result<i64, &'static str> {
@@ -498,15 +511,12 @@ impl SessionManager {
         if current_proxy.as_ref() != Some(proxy) {
             return Err("运维代理已变化，已丢弃重写结果");
         }
-        let accounts = self.accounts.read().await;
-        if !accounts
-            .get(account.id())
-            .is_some_and(|current| Arc::ptr_eq(current, sessions))
-        {
+        let mut cache = sessions.cache.write().await;
+        if cache.generation != generation {
             return Err("账号配置已变化，已丢弃重写结果");
         }
         let expire_at = Utc::now().timestamp() + TTL_SECONDS;
-        sessions.states.write().await.insert(
+        cache.states.insert(
             cache_key(account.id(), model),
             CachedState {
                 state: SessionState {
@@ -533,8 +543,8 @@ impl SessionManager {
         let Some(sessions) = self.accounts.read().await.get(account.id()).cloned() else {
             return;
         };
-        let states = sessions.states.read().await;
-        let Some(cached) = states.get(&cache_key(account.id(), request.model())) else {
+        let cache = sessions.cache.read().await;
+        let Some(cached) = cache.states.get(&cache_key(account.id(), request.model())) else {
             return;
         };
         if cached.credential_revision != account.revision()
@@ -544,7 +554,7 @@ impl SessionManager {
             return;
         }
         let state = cached.state.state_value.clone();
-        drop(states);
+        drop(cache);
         // HTTP 头和复用 WS 连接的逐帧 metadata 使用同一值。
         request.passthrough_headers.remove("x-codex-turn-state");
         request.turn_state = Some(state.clone());
@@ -566,10 +576,15 @@ impl SessionManager {
             tracing::warn!("Session keepalive account list unavailable");
             return;
         };
-        self.accounts.write().await.retain(|id, _| {
+        self.accounts.write().await.retain(|id, sessions| {
             accounts
                 .iter()
                 .any(|account| account.id() == id && eligible(account))
+                // 仍被请求持有或处于冷却期的账号不能换锁；重新启用也须遵守原有边界。
+                || Arc::strong_count(sessions) > 1
+                || sessions.retry_after.try_lock().map_or(true, |retry_after| {
+                    retry_after.is_some_and(|deadline| deadline > tokio::time::Instant::now())
+                })
         });
         for account in accounts.iter().filter(|account| eligible(account)) {
             match self.refresh(account.id()).await {

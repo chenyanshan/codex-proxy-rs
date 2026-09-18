@@ -1,4 +1,5 @@
 use super::*;
+use futures::FutureExt;
 
 #[tokio::test]
 async fn refresh_and_rewrite_isolate_every_account_and_model_using_only_oam_proxy() {
@@ -114,7 +115,7 @@ async fn duplicate_refresh_is_rejected_and_invalidated_inflight_results_cannot_r
             &proxy,
             "acct_a",
             model,
-            success("stale-state").set_delay(Duration::from_millis(100)),
+            success("stale-state").set_delay(Duration::from_millis(250)),
         )
         .await;
     }
@@ -136,8 +137,43 @@ async fn duplicate_refresh_is_rejected_and_invalidated_inflight_results_cannot_r
         ProviderAdminErrorKind::Conflict
     );
     manager.invalidate(&id).await;
+    assert_eq!(
+        manager.refresh(&id).await.unwrap_err().kind(),
+        ProviderAdminErrorKind::Conflict
+    );
+    // 没有合格账号时首轮只执行清理；禁用再启用也不能创建另一把刷新锁。
+    store.set_session_keepalive("acct_a", false);
+    store.set_session_keepalive("acct_b", false);
+    assert!(
+        manager
+            .run(CancellationToken::new())
+            .now_or_never()
+            .is_none()
+    );
+    store.set_session_keepalive("acct_a", true);
+    assert_eq!(
+        manager.refresh(&id).await.unwrap_err().kind(),
+        ProviderAdminErrorKind::Conflict
+    );
     let result = pending.await.unwrap().unwrap();
     assert!(result.models.iter().all(|item| item.error.is_some()));
+    let mut req = request("gpt-6-astra");
+    manager
+        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .await;
+    assert_eq!(req.turn_state.as_deref(), Some("client-state"));
+
+    proxy.reset().await;
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(&proxy, "acct_a", model, success("fresh-state")).await;
+    }
+    let result = manager.refresh(&id).await.unwrap();
+    assert!(result.models.iter().all(|item| item.error.is_none()));
+    manager
+        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .await;
+    assert_eq!(req.turn_state.as_deref(), Some("fresh-state"));
+    manager.invalidate(&id).await;
     let mut req = request("gpt-6-astra");
     manager
         .rewrite(&store.account("acct_a").unwrap(), &mut req)
@@ -148,7 +184,7 @@ async fn duplicate_refresh_is_rejected_and_invalidated_inflight_results_cannot_r
 #[tokio::test]
 async fn rate_limit_honors_retry_after_and_does_not_send_the_second_model() {
     let proxy = MockServer::start().await;
-    let (_, _, manager) = fixture(Some(&proxy.uri())).await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
     mock_model(
         &proxy,
         "acct_a",
@@ -161,7 +197,49 @@ async fn rate_limit_honors_retry_after_and_does_not_send_the_second_model() {
     assert!(first.models.iter().all(|model| model.error.is_some()));
     let second = manager.refresh(&id).await.unwrap();
     assert!(second.models.iter().all(|model| model.error.is_some()));
+    manager.invalidate(&id).await;
+    let after_invalidation = manager.refresh(&id).await.unwrap();
+    assert!(
+        after_invalidation
+            .models
+            .iter()
+            .all(|model| model.error.as_deref() == Some("上游要求稍后重试"))
+    );
     assert_eq!(proxy.received_requests().await.unwrap().len(), 1);
+
+    store.set_session_keepalive("acct_a", false);
+    store.set_session_keepalive("acct_b", false);
+    assert!(
+        manager
+            .run(CancellationToken::new())
+            .now_or_never()
+            .is_none()
+    );
+    store.set_session_keepalive("acct_a", true);
+    let after_cleanup = manager.refresh(&id).await.unwrap();
+    assert!(
+        after_cleanup
+            .models
+            .iter()
+            .all(|model| model.error.is_some())
+    );
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 1);
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    proxy.reset().await;
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(&proxy, "acct_a", model, success("after-cooldown")).await;
+    }
+    let after_cooldown = manager.refresh(&id).await.unwrap();
+    assert!(
+        after_cooldown
+            .models
+            .iter()
+            .all(|model| model.error.is_none())
+    );
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test]
