@@ -1,4 +1,4 @@
-# 会话保活与 State 热更新
+# State 重写与热更新
 
 该能力的全局开关和账号开关均默认关闭。管理员在设置页确认账户异常、限流和调用消耗风险并保存，再逐账号选择重写模型。后台和账户页面均可刷新所选模型的 State；业务请求只读取对应账号、对应模型的有效缓存。启用不要求先证明故障由 State 引起。
 
@@ -41,9 +41,13 @@ flowchart LR
 | 配置 | 存储与 API | 默认与更新语义 |
 | --- | --- | --- |
 | `session_keepalive_enabled: bool` | 全局运行设置；API `sessionKeepaliveEnabled` | 默认 false；提交 true 时必须携带 `sessionKeepaliveRiskConfirmed: true`，并存在测试通过的动态代理 |
+| `session_rewrite_concurrency: u32` | 全局运行设置；API `sessionRewriteConcurrency` | 默认 3，范围 1～10；省略或 null 保留 |
+| `session_rewrite_retry_interval_seconds: u32` | 全局运行设置；API `sessionRewriteRetryIntervalSeconds` | 默认 2 秒，范围 1～300；省略或 null 保留 |
 | `is_dynamic: bool` | 代理目录；API `isDynamic` | 默认 false；全系统仅一个动态代理，不允许任何账号以 ID、URL 或导入方式绑定为业务出口 |
 | `enable_session_keepalive: bool` | 账号；API `enableSessionKeepalive` | 默认 false；省略或 null 保留，false 显式关闭 |
 | `session_keepalive_models: Vec<String>` | 账号；API `sessionKeepaliveModels` | 默认两个模型；1～32 个不重复 ID，每个 1～128 字节，无首尾空白或控制字符；省略或 null 保留 |
+
+迁移 `0017_session_rewrite_retry_policy.sql` 为已有运行配置增加并发与间隔字段，不修改开关及账号选择。
 
 迁移 `0016_session_keepalive.sql` 增加全局与账号开关、模型选择和代理角色，默认模型为 `gpt-5.6-sol`、`gpt-6-astra`。迁移后全局仍关闭，需要在代理管理中保存并测试动态代理，再确认风险启用。代理必须经过统一 URL 规范化，避免复制未经规范化的地址而绕过业务绑定隔离。
 
@@ -70,15 +74,15 @@ struct SessionState {
 
 HTTP 成功响应中必须存在长度精确为 292 字节的 ASCII `x-codex-turn-state`。读取 Header 后先做 O(1) 长度断言，长度不符立即返回错误，不复制凭证、不读取响应体、不写缓存；长度通过后仍须在最多 64 KiB 的 SSE 中观察到 `response.completed` 才缓存。HTTP 错误、超时、缺失或不可解析 Header、失败/不完整事件和截断流均不写入。292 是本功能的业务准入规则，不代表密码学完整性验证。复用已有 State Header 解析与 Retry-After 解析。
 
-429 设置当前账号、当前模型的探活冷却，跨刷新取消与缓存失效保留。等待时间取阶梯延迟与该轮收到的最长 Retry-After 截止时间的较大值，未提供 Retry-After 时冷却 60 秒；不影响其他模型。重写不冒充业务请求记入用户用量账单。
+429 设置当前账号、当前模型的探活冷却，跨刷新取消与缓存失效保留。等待时间取配置间隔与该轮收到的最长 Retry-After 截止时间的较大值，未提供 Retry-After 时冷却 60 秒；不影响其他模型。重写不冒充业务请求记入用户用量账单。
 
 ## 5. 后台调度
 
 Worker 以 `openai-session-keepalive` 向 Host 注册，复用监督与取消机制。启动后执行一轮，再在每轮结束均匀抽取闭区间 `3180..=3300` 秒休眠，取消可中止执行或休眠。
 
-每轮顺序处理符合条件的账号，每个账号的所选模型作为独立异步 future 并发执行。手动和自动刷新共用账号互斥锁，全局最多同时刷新两个账号；忙时明确返回冲突，不创建无界等待队列。每个模型最多 3 个在途探针；选择默认两个模型时，每个账号最多 6 个。
+每轮顺序处理符合条件的账号，每个账号的所选模型作为独立异步 future 并发执行。手动和自动刷新共用账号互斥锁，全局最多同时刷新两个账号；忙时明确返回冲突，不创建无界等待队列。每个模型最多持有配置并发数个在途探针；默认并发 3、选择两个模型时，每个账号最多 6 个。
 
-每个模型按 `1、1、1、3、3、3、3` 的并发数执行探活，第七轮以后保持并发 3，直到成功。第一轮失败等待 2 秒，第二轮失败等待 3 秒，第三轮及以后全部失败等待 5 秒再循环。每轮使用 `select_ok` 接受首个通过 Header 与 SSE 校验的结果，立即 drop 剩余请求 future（包括在途 SSE）以取消同模型探针。成功模型立即写缓存并退出本次刷新，不随失败模型重试。
+全局设置的“State 重写”卡片可配置每模型探测并发数（1～10，默认 3）和重试间隔秒数（1～300，默认 2）。每个模型从第一轮即采用配置并发，一轮全部失败后等待配置间隔再循环，直到成功。每轮读取最新设置；已发出的请求和正在进行的等待不被参数修改打断，下一轮使用新值。每轮使用 `select_ok` 接受首个通过 Header 与 SSE 校验的结果，立即 drop 剩余请求 future（包括在途 SSE）以取消同模型探针。成功模型立即写缓存并退出本次刷新，不随失败模型重试。
 
 失败模型持续重试直到成功或调用被取消；账号资格、模型权限、凭据或代理配置变化时终止旧上下文。每轮发请求前及缓存写入前复核配置，账号缓存失效信号还能立即中止在途请求或休眠。刷新调用持有完整 future 树，没有脱离父调用的探针任务；调用被取消或 Worker 停止时同步丢弃所有子 future。
 

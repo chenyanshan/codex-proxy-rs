@@ -20,6 +20,8 @@ use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
     pub session_keepalive_enabled: bool,
+    pub session_rewrite_concurrency: u32,
+    pub session_rewrite_retry_interval_seconds: u32,
     pub disable_fast: bool,
     pub config_revision: Revision,
     pub admin_api_key: Option<String>,
@@ -112,6 +114,8 @@ impl fmt::Debug for RuntimeSettings {
 #[derive(Clone)]
 pub struct RuntimeSettingsUpdate {
     pub session_keepalive_enabled: Option<bool>,
+    pub session_rewrite_concurrency: Option<u32>,
+    pub session_rewrite_retry_interval_seconds: Option<u32>,
     pub disable_fast: Option<bool>,
     pub admin_api_key: Option<String>,
     pub refresh_margin_seconds: u64,
@@ -159,7 +163,17 @@ impl fmt::Debug for RuntimeSettingsUpdate {
 
 impl RuntimeSettingsUpdate {
     pub fn validate(&self) -> StoreResult<()> {
-        if self.request_location.validate().is_err()
+        if gateway_core::provider_ports::SessionRewritePolicy::try_new(
+            self.session_rewrite_concurrency.unwrap_or(
+                gateway_core::provider_ports::SessionRewritePolicy::default().concurrency(),
+            ),
+            self.session_rewrite_retry_interval_seconds.unwrap_or(
+                gateway_core::provider_ports::SessionRewritePolicy::default()
+                    .retry_interval_seconds(),
+            ),
+        )
+        .is_err()
+            || self.request_location.validate().is_err()
             || self.responses_max_decompressed_body_bytes == 0
             || isize::try_from(self.responses_max_decompressed_body_bytes).is_err()
             || self.refresh_margin_seconds == 0
@@ -243,7 +257,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     account_auto_freeze_enabled, account_auto_freeze_threshold,
                     account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                    account_auto_freeze_adaptive_concurrency, session_keepalive_enabled
+                    account_auto_freeze_adaptive_concurrency, session_keepalive_enabled, session_rewrite_concurrency, session_rewrite_retry_interval_seconds
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -257,6 +271,24 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
 }
 
 impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
+    fn load_session_rewrite_policy(
+        &self,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<gateway_core::provider_ports::SessionRewritePolicy, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            let (concurrency, interval): (i64, i64) = sqlx::query_as("select session_rewrite_concurrency, session_rewrite_retry_interval_seconds from runtime_settings where id = 1")
+                .fetch_one(&self.pool).await.map_err(|_| provider_unavailable("load session rewrite policy"))?;
+            gateway_core::provider_ports::SessionRewritePolicy::try_new(
+                u32::try_from(concurrency)
+                    .map_err(|_| provider_invalid("decode session rewrite concurrency"))?,
+                u32::try_from(interval)
+                    .map_err(|_| provider_invalid("decode session rewrite interval"))?,
+            )
+        })
+    }
+
     fn load_session_keepalive_proxy(
         &self,
     ) -> futures::future::BoxFuture<
@@ -322,7 +354,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 account_auto_freeze_enabled, account_auto_freeze_threshold,
                 account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                account_auto_freeze_adaptive_concurrency, session_keepalive_enabled
+                account_auto_freeze_adaptive_concurrency, session_keepalive_enabled, session_rewrite_concurrency, session_rewrite_retry_interval_seconds
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -386,6 +418,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      responses_max_decompressed_body_bytes = $25,
                      disable_fast = coalesce($26, disable_fast),
                      session_keepalive_enabled = coalesce($27, session_keepalive_enabled),
+                     session_rewrite_concurrency = coalesce($28, session_rewrite_concurrency),
+                     session_rewrite_retry_interval_seconds = coalesce($29, session_rewrite_retry_interval_seconds),
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -429,6 +463,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     )
     .bind(update.disable_fast)
     .bind(update.session_keepalive_enabled)
+    .bind(update.session_rewrite_concurrency.map(i64::from))
+    .bind(update.session_rewrite_retry_interval_seconds.map(i64::from))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -479,6 +515,8 @@ pub(crate) async fn update_admin_api_key_in_transaction(
 #[derive(sqlx::FromRow)]
 struct RuntimeSettingsRow {
     session_keepalive_enabled: bool,
+    session_rewrite_concurrency: i64,
+    session_rewrite_retry_interval_seconds: i64,
     disable_fast: bool,
     config_revision: i64,
     admin_api_key: Option<String>,
@@ -512,6 +550,8 @@ struct RuntimeSettingsRow {
 fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
     Ok(RuntimeSettings {
         session_keepalive_enabled: row.session_keepalive_enabled,
+        session_rewrite_concurrency: to_u32(row.session_rewrite_concurrency)?,
+        session_rewrite_retry_interval_seconds: to_u32(row.session_rewrite_retry_interval_seconds)?,
         config_revision: Revision::new(to_u64(row.config_revision)?)?,
         admin_api_key: row.admin_api_key,
         refresh_margin_seconds: to_u64(row.refresh_margin_seconds)?,

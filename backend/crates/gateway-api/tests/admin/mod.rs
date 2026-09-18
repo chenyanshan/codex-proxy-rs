@@ -402,6 +402,12 @@ impl SettingsStore for MemorySettingsStore {
     ) -> AdminStoreResult<RuntimeSettings> {
         let mut settings = self.settings.lock().expect("settings");
         let updated = RuntimeSettings {
+            session_rewrite_concurrency: command
+                .session_rewrite_concurrency
+                .unwrap_or(settings.session_rewrite_concurrency),
+            session_rewrite_retry_interval_seconds: command
+                .session_rewrite_retry_interval_seconds
+                .unwrap_or(settings.session_rewrite_retry_interval_seconds),
             session_keepalive_enabled: command
                 .session_keepalive_enabled
                 .unwrap_or(settings.session_keepalive_enabled),
@@ -1282,6 +1288,8 @@ fn test_runtime_settings() -> RuntimeSettings {
     ]);
     RuntimeSettings {
         session_keepalive_enabled: false,
+        session_rewrite_concurrency: 3,
+        session_rewrite_retry_interval_seconds: 2,
         disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),

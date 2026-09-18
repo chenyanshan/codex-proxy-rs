@@ -132,7 +132,16 @@ impl SettingsService for DefaultSettingsService {
 }
 
 fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError> {
-    let valid = command.request_location.validate().is_ok()
+    let valid = gateway_core::provider_ports::SessionRewritePolicy::try_new(
+        command
+            .session_rewrite_concurrency
+            .unwrap_or(gateway_core::provider_ports::SessionRewritePolicy::default().concurrency()),
+        command.session_rewrite_retry_interval_seconds.unwrap_or(
+            gateway_core::provider_ports::SessionRewritePolicy::default().retry_interval_seconds(),
+        ),
+    )
+    .is_ok()
+        && command.request_location.validate().is_ok()
         && command.responses_max_decompressed_body_bytes > 0
         && isize::try_from(command.responses_max_decompressed_body_bytes).is_ok()
         && command.refresh_margin_seconds > 0

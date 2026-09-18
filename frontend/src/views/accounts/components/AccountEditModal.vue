@@ -97,10 +97,10 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
 
       <div v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'" class="flex items-center justify-between gap-3">
         <div class="grid gap-1">
-          <span class="text-cp font-medium text-cp-text-secondary">会话保活</span>
+          <span class="text-cp font-medium text-cp-text-secondary">State 重写</span>
           <span class="text-cp-sm text-cp-text-tertiary">自动使用全局动态代理，逐个模型发送 hi；须先在设置页开启全局开关。</span>
         </div>
-        <BaseSwitch v-model="enableSessionKeepalive" label="切换账号会话保活" :disabled="saving" />
+        <BaseSwitch v-model="enableSessionKeepalive" label="切换账号 State 重写" :disabled="saving" />
       </div>
 
       <AccountSessionModelsField v-if="enableSessionKeepalive && account.provider === 'openai' && account.authenticationKind === 'oauth'" v-model="sessionKeepaliveModels" :account-id="account.id" :disabled="saving" />

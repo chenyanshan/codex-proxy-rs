@@ -66,7 +66,7 @@ docker compose -f deploy/compose.yaml up -d --no-build --wait
 
 ## 数据与回退
 
-本分支只保留一份新增 SQL：`0016_session_keepalive.sql`。稳定版基线 v3.10.0 使用 0001–0015；
+本分支在 v3.10.0 基线之上包含 `0016_session_keepalive.sql` 和 `0017_session_rewrite_retry_policy.sql`；后者只增加 State 重写的并发数与重试间隔，已有实验版 0016 数据库可以原地升级。稳定版基线 v3.10.0 使用 0001–0015；
 实验库不能原地降级到稳定版，也不能随意合并主分支未来同编号迁移。
 已经运行过 PR #151 原始 0016–0018 或旧版合并 0016 的源码实例，需要完整备份后重建与目标代码匹配的库，
 并按目标表结构恢复业务数据；不要修改 `_sqlx_migrations` 的 checksum。

@@ -499,10 +499,18 @@ async fn wait_for_state(
 }
 
 #[tokio::test]
-async fn retries_follow_three_single_rounds_then_threes_and_prune_successful_models() {
+async fn configured_concurrency_applies_from_first_round_and_prunes_successful_models() {
     let proxy = MockServer::start().await;
-    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
-    mock_model(&proxy, "acct_a", "gpt-6-astra", success("early")).await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
+    *policy.rewrite.lock().unwrap() =
+        gateway_core::provider_ports::SessionRewritePolicy::try_new(3, 1).unwrap();
+    mock_model(
+        &proxy,
+        "acct_a",
+        "gpt-6-astra",
+        success("early").set_delay(Duration::from_millis(100)),
+    )
+    .await;
     let attempts = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&attempts);
     Mock::given(method("POST"))
@@ -510,10 +518,9 @@ async fn retries_follow_three_single_rounds_then_threes_and_prune_successful_mod
         .respond_with(move |_: &wiremock::Request| {
             let mut attempts = observed.lock().unwrap();
             attempts.push(std::time::Instant::now());
-            // 七轮全部失败，第八轮恢复，验证前三轮单探针且后续始终最多三个。
             match attempts.len() {
-                1 => response_with_state(&format!("{}=", "A".repeat(311))),
-                2..=15 => ResponseTemplate::new(503),
+                1 => response_with_state(&"A".repeat(312)),
+                2..=9 => ResponseTemplate::new(503),
                 _ => success("recovered").set_delay(Duration::from_millis(100)),
             }
         })
@@ -523,7 +530,7 @@ async fn retries_follow_three_single_rounds_then_threes_and_prune_successful_mod
     let pending = spawn_refresh(&manager, &id);
     wait_for_state(&manager, &store, "gpt-6-astra", "early").await;
     assert!(!pending.is_finished());
-    let result = tokio::time::timeout(Duration::from_secs(40), pending)
+    let result = tokio::time::timeout(Duration::from_secs(8), pending)
         .await
         .unwrap()
         .unwrap()
@@ -532,17 +539,50 @@ async fn retries_follow_three_single_rounds_then_threes_and_prune_successful_mod
     wait_for_state(&manager, &store, "gpt-5.6-sol", "recovered").await;
     {
         let times = attempts.lock().unwrap();
-        assert_eq!(times.len(), 18);
-        assert!(times[1].duration_since(times[0]) >= Duration::from_secs(2));
-        assert!(times[2].duration_since(times[1]) >= Duration::from_secs(3));
-        for (previous, next) in [(2, 3), (5, 6), (8, 9), (11, 12), (14, 15)] {
-            assert!(times[next].duration_since(times[previous]) >= Duration::from_secs(5));
-        }
-        for start in [3, 6, 9, 12, 15] {
+        assert_eq!(times.len(), 12);
+        for start in [0, 3, 6, 9] {
             assert!(times[start + 2].duration_since(times[start]) < Duration::from_secs(1));
+            if start > 0 {
+                assert!(times[start].duration_since(times[start - 1]) >= Duration::from_secs(1));
+            }
         }
     }
-    assert_eq!(proxy.received_requests().await.unwrap().len(), 19);
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 15);
+}
+
+#[tokio::test]
+async fn retry_rounds_pick_up_changed_global_concurrency_and_interval() {
+    let proxy = MockServer::start().await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
+    store.set_session_models("acct_a", vec!["gpt-5.6-sol".to_owned()]);
+    let times = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&times);
+    Mock::given(method("POST"))
+        .respond_with(move |_: &wiremock::Request| {
+            observed.lock().unwrap().push(std::time::Instant::now());
+            ResponseTemplate::new(503)
+        })
+        .mount(&proxy)
+        .await;
+    let id = ProviderAccountId::new("acct_a").unwrap();
+    let pending = spawn_refresh(&manager, &id);
+    wait_for_requests(&proxy, 1).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    *policy.rewrite.lock().unwrap() =
+        gateway_core::provider_ports::SessionRewritePolicy::try_new(2, 2).unwrap();
+    tokio::time::timeout(Duration::from_secs(6), async {
+        while proxy.received_requests().await.unwrap().len() < 5 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    let times = times.lock().unwrap();
+    assert_eq!(times.len(), 5);
+    assert!(times[1].duration_since(times[0]) >= Duration::from_secs(1));
+    assert!(times[3].duration_since(times[2]) >= Duration::from_secs(2));
 }
 
 #[tokio::test]
@@ -580,8 +620,10 @@ async fn every_non_292_length_is_rejected_and_previous_cache_is_preserved() {
 #[tokio::test]
 async fn first_success_does_not_wait_for_slower_siblings_or_overwrite_the_winner() {
     let proxy = MockServer::start().await;
-    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
-    mock_model(&proxy, "acct_a", "gpt-6-astra", success("early")).await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
+    store.set_session_models("acct_a", vec!["gpt-5.6-sol".to_owned()]);
+    *policy.rewrite.lock().unwrap() =
+        gateway_core::provider_ports::SessionRewritePolicy::try_new(3, 1).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
     Mock::given(method("POST"))
@@ -604,7 +646,7 @@ async fn first_success_does_not_wait_for_slower_siblings_or_overwrite_the_winner
     assert_eq!(calls.load(Ordering::SeqCst), 6);
     tokio::time::sleep(Duration::from_millis(2200)).await;
     wait_for_state(&manager, &store, "gpt-5.6-sol", "winner").await;
-    assert_eq!(proxy.received_requests().await.unwrap().len(), 7);
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 6);
 }
 
 #[tokio::test]
@@ -647,7 +689,9 @@ async fn invalid_headers_and_first_wins_close_unfinished_http_responses() {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy = format!("http://{}", listener.local_addr().unwrap());
-    let (_, _, manager) = fixture(Some(&proxy)).await;
+    let (_, policy, manager) = fixture(Some(&proxy)).await;
+    *policy.rewrite.lock().unwrap() =
+        gateway_core::provider_ports::SessionRewritePolicy::try_new(3, 1).unwrap();
     let closed = Arc::new(AtomicUsize::new(0));
     let observed_closed = Arc::clone(&closed);
     let accepted = Arc::new(AtomicUsize::new(0));
@@ -657,65 +701,66 @@ async fn invalid_headers_and_first_wins_close_unfinished_http_responses() {
         let mut connections = JoinSet::new();
         loop {
             tokio::select! {
-                connection = listener.accept() => {
-                    let (mut socket, _) = connection.unwrap();
-                    let attempts = Arc::clone(&attempts);
-                    let closed = Arc::clone(&observed_closed);
-                    observed_accepted.fetch_add(1, Ordering::SeqCst);
-                    connections.spawn(async move {
-                        let mut request_bytes = Vec::new();
-                        let mut buffer = [0u8; 4096];
-                        let body = loop {
-                            let read = socket.read(&mut buffer).await.unwrap();
-                            assert!(read > 0);
-                            request_bytes.extend_from_slice(&buffer[..read]);
-                            if let Some(end) = request_bytes.windows(4).position(|part| part == b"\r\n\r\n") {
-                                let headers = std::str::from_utf8(&request_bytes[..end]).unwrap();
-                                let length = headers.lines().find_map(|line| {
-                                    let (name, value) = line.split_once(':')?;
-                                    name.eq_ignore_ascii_case("content-length")
-                                        .then(|| value.trim().parse::<usize>().unwrap())
-                                }).unwrap();
-                                if request_bytes.len() >= end + 4 + length {
-                                    break serde_json::from_slice::<serde_json::Value>(
-                                        &zstd::stream::decode_all(&request_bytes[end + 4..end + 4 + length]).unwrap(),
-                                    ).unwrap();
+                        connection = listener.accept() => {
+                            let (mut socket, _) = connection.unwrap();
+                            let attempts = Arc::clone(&attempts);
+                            *policy.rewrite.lock().unwrap() = gateway_core::provider_ports::SessionRewritePolicy::try_new(3, 1).unwrap();
+            let closed = Arc::clone(&observed_closed);
+                            observed_accepted.fetch_add(1, Ordering::SeqCst);
+                            connections.spawn(async move {
+                                let mut request_bytes = Vec::new();
+                                let mut buffer = [0u8; 4096];
+                                let body = loop {
+                                    let read = socket.read(&mut buffer).await.unwrap();
+                                    assert!(read > 0);
+                                    request_bytes.extend_from_slice(&buffer[..read]);
+                                    if let Some(end) = request_bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                                        let headers = std::str::from_utf8(&request_bytes[..end]).unwrap();
+                                        let length = headers.lines().find_map(|line| {
+                                            let (name, value) = line.split_once(':')?;
+                                            name.eq_ignore_ascii_case("content-length")
+                                                .then(|| value.trim().parse::<usize>().unwrap())
+                                        }).unwrap();
+                                        if request_bytes.len() >= end + 4 + length {
+                                            break serde_json::from_slice::<serde_json::Value>(
+                                                &zstd::stream::decode_all(&request_bytes[end + 4..end + 4 + length]).unwrap(),
+                                            ).unwrap();
+                                        }
+                                    }
+                                };
+                                let attempt = {
+                                    let mut attempts = attempts.lock().unwrap();
+                                    let count = attempts.entry(body["model"].as_str().unwrap().to_owned()).or_default();
+                                    *count += 1;
+                                    *count
+                                };
+                                if attempt == 4 {
+                                    // 等同轮三个请求都进入 HTTP 阶段，再返回首个完整成功。
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                    let body = "data: {\"type\":\"response.completed\"}\n\n";
+                                    let response = format!(
+                                        "HTTP/1.1 200 OK\r\nx-codex-turn-state: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                        state("winner"), body.len(),
+                                    );
+                                    socket.write_all(response.as_bytes()).await.unwrap();
+                                } else {
+                                    // 首轮三个非法长度与后续落败探针都只发 Header，响应体永久悬挂。
+                                    let state = if attempt <= 3 { "A".repeat(312) } else { state("pending") };
+                                    let response = format!(
+                                        "HTTP/1.1 200 OK\r\nx-codex-turn-state: {state}\r\nContent-Length: 100000\r\n\r\n",
+                                    );
+                                    socket.write_all(response.as_bytes()).await.unwrap();
+                                    match socket.read(&mut buffer).await {
+                                        Ok(0) | Err(_) => { closed.fetch_add(1, Ordering::SeqCst); }
+                                        Ok(_) => panic!("unexpected bytes on unfinished response"),
+                                    }
                                 }
-                            }
-                        };
-                        let attempt = {
-                            let mut attempts = attempts.lock().unwrap();
-                            let count = attempts.entry(body["model"].as_str().unwrap().to_owned()).or_default();
-                            *count += 1;
-                            *count
-                        };
-                        if attempt == 4 {
-                            // 等同轮三个请求都进入 HTTP 阶段，再返回首个完整成功。
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            let body = "data: {\"type\":\"response.completed\"}\n\n";
-                            let response = format!(
-                                "HTTP/1.1 200 OK\r\nx-codex-turn-state: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                                state("winner"), body.len(),
-                            );
-                            socket.write_all(response.as_bytes()).await.unwrap();
-                        } else {
-                            // 前三轮非法长度与后续落败探针都只发 Header，响应体永久悬挂。
-                            let state = if attempt <= 3 { "A".repeat(312) } else { state("pending") };
-                            let response = format!(
-                                "HTTP/1.1 200 OK\r\nx-codex-turn-state: {state}\r\nContent-Length: 100000\r\n\r\n",
-                            );
-                            socket.write_all(response.as_bytes()).await.unwrap();
-                            match socket.read(&mut buffer).await {
-                                Ok(0) | Err(_) => { closed.fetch_add(1, Ordering::SeqCst); }
-                                Ok(_) => panic!("unexpected bytes on unfinished response"),
-                            }
+                            });
                         }
-                    });
-                }
-                Some(result) = connections.join_next(), if !connections.is_empty() => {
-                    result.unwrap();
-                }
-            }
+                        Some(result) = connections.join_next(), if !connections.is_empty() => {
+                            result.unwrap();
+                        }
+                    }
         }
     });
     let id = ProviderAccountId::new("acct_a").unwrap();

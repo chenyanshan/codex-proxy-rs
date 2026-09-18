@@ -35,6 +35,8 @@ pub type ModelMappings = BTreeMap<String, String>;
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
     pub session_keepalive_enabled: bool,
+    pub session_rewrite_concurrency: u32,
+    pub session_rewrite_retry_interval_seconds: u32,
     pub disable_fast: bool,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -68,6 +70,8 @@ pub struct RuntimeSettingsView {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
     pub session_keepalive_enabled: Option<bool>,
+    pub session_rewrite_concurrency: Option<u32>,
+    pub session_rewrite_retry_interval_seconds: Option<u32>,
     #[serde(default)]
     pub session_keepalive_risk_confirmed: bool,
     pub disable_fast: Option<bool>,
@@ -100,6 +104,17 @@ pub struct UpdateRuntimeSettingsRequest {
 impl UpdateRuntimeSettingsRequest {
     /// 校验公共运行参数。
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        gateway_core::provider_ports::SessionRewritePolicy::try_new(
+            self.session_rewrite_concurrency.unwrap_or(
+                gateway_core::provider_ports::SessionRewritePolicy::default().concurrency(),
+            ),
+            self.session_rewrite_retry_interval_seconds.unwrap_or(
+                gateway_core::provider_ports::SessionRewritePolicy::default()
+                    .retry_interval_seconds(),
+            ),
+        )
+        .map_err(|_| WireValidationError::new("sessionRewritePolicy"))?;
+
         self.request_location
             .validate()
             .map_err(|_| WireValidationError::new("requestLocation"))?;
@@ -182,6 +197,8 @@ impl UpdateRuntimeSettingsRequest {
         self.validate()?;
         Ok(ReplaceRuntimeSettings {
             session_keepalive_enabled: self.session_keepalive_enabled,
+            session_rewrite_concurrency: self.session_rewrite_concurrency,
+            session_rewrite_retry_interval_seconds: self.session_rewrite_retry_interval_seconds,
             session_keepalive_risk_confirmed: self.session_keepalive_risk_confirmed,
             disable_fast: self.disable_fast,
             request_location_enabled: self.request_location_enabled,
@@ -227,6 +244,8 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
         Self {
             disable_fast: settings.disable_fast,
             session_keepalive_enabled: settings.session_keepalive_enabled,
+            session_rewrite_concurrency: settings.session_rewrite_concurrency,
+            session_rewrite_retry_interval_seconds: settings.session_rewrite_retry_interval_seconds,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
             model_mappings: wire_model_mappings(settings.model_mappings),
@@ -570,6 +589,7 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
         "settingsUsageRetentionOverflow" => "usageRetentionDays 不合法".to_owned(),
         "settingsOpsRetentionOverflow" => "opsEventRetentionDays 不合法".to_owned(),
         "settingsAuditRetentionOverflow" => "auditRetentionDays 不合法".to_owned(),
+        "sessionRewritePolicy" => "State 重写并发数应为 1～10，重试间隔应为 1～300 秒".to_owned(),
         "requestLocation" => "请求位置不合法，请检查国家代码、地区和城市".to_owned(),
         "settingsFreezeThresholdOverflow" => "accountAutoFreezeThreshold 不合法".to_owned(),
         "accountAutoFreezeThreshold" => "账号自动冻结阈值应为 2～1000 的整数".to_owned(),

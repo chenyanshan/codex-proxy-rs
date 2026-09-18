@@ -6,6 +6,8 @@ export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' 
 
 export interface RuntimeSettings {
   sessionKeepaliveEnabled: boolean
+  sessionRewriteConcurrency: number
+  sessionRewriteRetryIntervalSeconds: number
   disableFast: boolean
   requestLocationEnabled: boolean
   requestLocation: RequestLocation

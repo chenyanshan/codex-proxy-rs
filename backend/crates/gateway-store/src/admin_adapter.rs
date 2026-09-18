@@ -40,6 +40,9 @@ impl SettingsStore for AdminSettingsStoreAdapter {
         let replacement = postgres::ControlPlaneReplacement {
             settings: postgres::RuntimeSettingsUpdate {
                 session_keepalive_enabled: command.session_keepalive_enabled,
+                session_rewrite_concurrency: command.session_rewrite_concurrency,
+                session_rewrite_retry_interval_seconds: command
+                    .session_rewrite_retry_interval_seconds,
                 admin_api_key: current.settings.admin_api_key,
                 refresh_margin_seconds: command.refresh_margin_seconds,
                 refresh_concurrency: command.refresh_concurrency,
@@ -77,6 +80,8 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 vec![
                     "disable_fast".to_owned(),
                     "session_keepalive_enabled".to_owned(),
+                    "session_rewrite_concurrency".to_owned(),
+                    "session_rewrite_retry_interval_seconds".to_owned(),
                     "request_location_enabled".to_owned(),
                     "request_location_json".to_owned(),
                     "model_mappings_json".to_owned(),
@@ -187,6 +192,8 @@ pub(crate) fn admin_runtime_settings(
         .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
         session_keepalive_enabled: settings.session_keepalive_enabled,
+        session_rewrite_concurrency: settings.session_rewrite_concurrency,
+        session_rewrite_retry_interval_seconds: settings.session_rewrite_retry_interval_seconds,
         config_revision: admin_revision(settings.config_revision)?,
         disable_fast: settings.disable_fast,
         request_location_enabled: settings.request_location_enabled,

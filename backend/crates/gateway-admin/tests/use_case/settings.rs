@@ -62,6 +62,8 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
             },
             ReplaceRuntimeSettings {
                 session_keepalive_enabled: None,
+                session_rewrite_concurrency: None,
+                session_rewrite_retry_interval_seconds: None,
                 session_keepalive_risk_confirmed: false,
                 disable_fast: None,
                 request_location_enabled: false,
@@ -119,6 +121,8 @@ async fn settings_should_require_keepalive_risk_ack_before_store_call() {
             },
             ReplaceRuntimeSettings {
                 session_keepalive_enabled: Some(true),
+                session_rewrite_concurrency: None,
+                session_rewrite_retry_interval_seconds: None,
                 session_keepalive_risk_confirmed: false,
                 disable_fast: None,
                 request_location_enabled: false,

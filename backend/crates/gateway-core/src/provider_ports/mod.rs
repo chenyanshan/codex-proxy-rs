@@ -926,7 +926,57 @@ fn invalid_refresh_policy(operation: &'static str) -> ProviderStoreError {
     ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, operation)
 }
 
+/// State 重写的每模型并发数与失败轮次间隔；手动刷新与后台共用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionRewritePolicy {
+    concurrency: u32,
+    retry_interval_seconds: u32,
+}
+
+impl Default for SessionRewritePolicy {
+    fn default() -> Self {
+        Self {
+            concurrency: 3,
+            retry_interval_seconds: 2,
+        }
+    }
+}
+
+impl SessionRewritePolicy {
+    pub fn try_new(
+        concurrency: u32,
+        retry_interval_seconds: u32,
+    ) -> Result<Self, ProviderStoreError> {
+        if !(1..=10).contains(&concurrency) || !(1..=300).contains(&retry_interval_seconds) {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "session rewrite policy",
+            ));
+        }
+        Ok(Self {
+            concurrency,
+            retry_interval_seconds,
+        })
+    }
+
+    #[must_use]
+    pub const fn concurrency(self) -> u32 {
+        self.concurrency
+    }
+
+    #[must_use]
+    pub const fn retry_interval_seconds(self) -> u32 {
+        self.retry_interval_seconds
+    }
+}
+
 pub trait ProviderRuntimePolicyPort: Send + Sync {
+    fn load_session_rewrite_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<SessionRewritePolicy, ProviderStoreError>> {
+        Box::pin(async { Ok(SessionRewritePolicy::default()) })
+    }
+
     /// 独立运维出口；未配置时禁止重写回退到业务代理或直连。
     fn load_session_keepalive_proxy(
         &self,

@@ -10,6 +10,8 @@ use super::TestDatabase;
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
         session_keepalive_enabled: None,
+        session_rewrite_concurrency: None,
+        session_rewrite_retry_interval_seconds: None,
         disable_fast: None,
         request_location_enabled: false,
         request_location: Default::default(),
@@ -538,6 +540,46 @@ async fn keepalive_requires_tested_dynamic_proxy_and_defaults_off() {
             .await
             .unwrap()
             .session_keepalive_enabled
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn session_rewrite_settings_persist_and_drive_provider_policy() {
+    use gateway_core::provider_ports::ProviderRuntimePolicyPort;
+    let Some(database) = TestDatabase::create("session_rewrite_policy").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let defaults = repository.load_session_rewrite_policy().await.unwrap();
+    assert_eq!(defaults.concurrency(), 3);
+    assert_eq!(defaults.retry_interval_seconds(), 2);
+    let mut update = settings_with_margin(3_600);
+    update.session_rewrite_concurrency = Some(8);
+    update.session_rewrite_retry_interval_seconds = Some(4);
+    repository.update_runtime_settings(update).await.unwrap();
+    repository
+        .update_runtime_settings(settings_with_margin(3_600))
+        .await
+        .unwrap();
+    let reloaded = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let settings = reloaded.load_runtime_settings().await.unwrap();
+    assert_eq!(settings.session_rewrite_concurrency, 8);
+    assert_eq!(settings.session_rewrite_retry_interval_seconds, 4);
+    let policy = reloaded.load_session_rewrite_policy().await.unwrap();
+    assert_eq!(policy.concurrency(), 8);
+    assert_eq!(policy.retry_interval_seconds(), 4);
+    for (concurrency, interval) in [(0, 1), (11, 1), (1, 0), (1, 301)] {
+        let mut invalid = settings_with_margin(3_600);
+        invalid.session_rewrite_concurrency = Some(concurrency);
+        invalid.session_rewrite_retry_interval_seconds = Some(interval);
+        assert!(repository.update_runtime_settings(invalid).await.is_err());
+        assert!(sqlx::query("update runtime_settings set session_rewrite_concurrency = $1, session_rewrite_retry_interval_seconds = $2")
+            .bind(i64::from(concurrency)).bind(i64::from(interval)).execute(&database.pool).await.is_err());
+    }
+    assert_eq!(
+        reloaded.load_session_rewrite_policy().await.unwrap(),
+        policy
     );
     database.close().await;
 }

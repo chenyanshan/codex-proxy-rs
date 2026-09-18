@@ -40,7 +40,6 @@ use crate::{
 pub const SESSION_KEEPALIVE_MODELS: [&str; 2] = ["gpt-5.6-sol", "gpt-6-astra"];
 const TTL_SECONDS: i64 = 3600;
 const TURN_STATE_LENGTH: usize = 292;
-const PROBE_CONCURRENCY: [usize; 7] = [1, 1, 1, 3, 3, 3, 3];
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HEARTBEAT_BYTES: usize = 64 * 1024;
 
@@ -272,7 +271,6 @@ impl SessionManager {
         sessions: &AccountSessions,
         generation: u64,
     ) -> Result<String, String> {
-        let mut stage = 0usize;
         let mut attempt = 1u32;
         loop {
             // 无限重试仍须遵守配置变更，不能持续使用旧账号或旧代理。
@@ -286,7 +284,12 @@ impl SessionManager {
                 tokio::time::sleep_until(deadline).await;
                 continue;
             }
-            let concurrency = PROBE_CONCURRENCY[stage];
+            let policy = self
+                .policy
+                .load_session_rewrite_policy()
+                .await
+                .map_err(|_| "State 重写参数读取失败".to_owned())?;
+            let concurrency = policy.concurrency();
             let probes = (0..concurrency).map(|_| {
                 Box::pin(self.heartbeat(
                     client,
@@ -313,14 +316,13 @@ impl SessionManager {
                     );
                 }
             }
-            let mut deadline =
-                tokio::time::Instant::now() + Duration::from_secs([2, 3, 5][stage.min(2)]);
+            let mut deadline = tokio::time::Instant::now()
+                + Duration::from_secs(u64::from(policy.retry_interval_seconds()));
             // 限流只延长当前模型的等待；并发响应不能缩短已收到的 Retry-After。
             if let Some(upstream_deadline) = sessions.retry_after.lock().await.get(model).copied() {
                 deadline = deadline.max(upstream_deadline);
             }
             tokio::time::sleep_until(deadline).await;
-            stage = (stage + 1).min(PROBE_CONCURRENCY.len() - 1);
             attempt = attempt.saturating_add(1);
         }
     }

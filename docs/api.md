@@ -945,7 +945,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 }
 ```
 
-`refreshedAt` 为 UTC 时间，`expireAt` 为 Unix 秒。成功项本地 TTL 为 3600 秒；失败项不延长旧 State 的 TTL。各模型独立按 1 / 1 / 1 / 3 / 3 / 3 / 3 个并发探针（之后保持 3）重试，失败等待 2 / 3 / 5 秒（429 可按 Retry-After 延长），成功后立即退出并更新缓存；失败模型会持续重试，接口可能长时间等待，直至全部模型成功或配置变化使其退出。HTTP 200 表示已完成本次逐模型处理，调用方必须检查各项 `error`，可全部失败。前置条件错误为 400，JSON 字段类型或未知字段错误为 422，不存在为 404，同账号刷新中或全局探活并发已满为 409，依赖不可用为 503，未授权为 401。响应不包含 State 原文，并带 `Cache-Control: no-store`。
+`refreshedAt` 为 UTC 时间，`expireAt` 为 Unix 秒。成功项本地 TTL 为 3600 秒；失败项不延长旧 State 的 TTL。各模型独立按全局 `sessionRewriteConcurrency` 并发探测，全部失败后等待 `sessionRewriteRetryIntervalSeconds` 秒（429 可按 Retry-After 延长），成功后立即退出并更新缓存；失败模型会持续重试，接口可能长时间等待，直至全部模型成功或配置变化使其退出。HTTP 200 表示已完成本次逐模型处理，调用方必须检查各项 `error`，可全部失败。前置条件错误为 400，JSON 字段类型或未知字段错误为 422，不存在为 404，同账号刷新中或全局探活并发已满为 409，依赖不可用为 503，未授权为 401。响应不包含 State 原文，并带 `Cache-Control: no-store`。
 
 前端手动刷新使用 `POST /api/admin/accounts/session-state/refresh/stream`，鉴权与 JSON 请求体同上。响应为 `text/event-stream`，发送心跳并禁用代理缓冲；每个模型完成写入或终止时发送 `data: {"type":"model","data":{...逐模型结果...}}`，全体结束时发送 `{"type":"complete","data":{...汇总结果...}}`。已经建立流之后的前置条件或依赖错误通过 `{"type":"error","message":"脱敏错误"}` 返回；鉴权与请求解析错误仍使用标准 HTTP 错误信封。流不返回凭证。断开连接会取消未完成的刷新与重试，已写入的成功缓存保留；客户端不得自动重连而重复发起刷新。
 
@@ -971,6 +971,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 ```text
 sessionKeepaliveEnabled
 sessionKeepaliveRiskConfirmed
+sessionRewriteConcurrency
+sessionRewriteRetryIntervalSeconds
 disableFast
 requestLocationEnabled
 requestLocation
@@ -997,6 +999,8 @@ accountAutoFreezeProbeEnabled
 accountAutoFreezeProbeModel
 accountAutoFreezeAdaptiveConcurrency
 ```
+
+`sessionRewriteConcurrency` 为每模型从首轮开始的探测并发数，整数 1～10，默认 3；`sessionRewriteRetryIntervalSeconds` 为一轮全部失败后的等待秒数，整数 1～300，默认 2。两个字段省略或 `null` 保留当前值；保存后手动与后台刷新在下一轮读取新值，不打断正在等待或执行的请求。后台 53～55 分钟周期不受这两个字段影响。
 
 `disableFast` 默认 `false`，更新时省略或 `null` 保留现值。全局开启时，所有 Key 的 OpenAI Responses 请求关闭 Fast；
 全局关闭时仍应用 Key 绑定分组的限制。关闭 Fast 只将顶层 `service_tier` 的 `priority`（含 `fast` 别名）

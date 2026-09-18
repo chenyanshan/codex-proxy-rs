@@ -37,9 +37,18 @@ use crate::support::{MemoryAccountStore, profile, secret};
 
 struct Policy {
     proxy: Mutex<Option<OutboundProxy>>,
+    rewrite: Mutex<gateway_core::provider_ports::SessionRewritePolicy>,
     reads: AtomicUsize,
 }
 impl ProviderRuntimePolicyPort for Policy {
+    fn load_session_rewrite_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<gateway_core::provider_ports::SessionRewritePolicy, ProviderStoreError>>
+    {
+        let policy = *self.rewrite.lock().unwrap();
+        Box::pin(async move { Ok(policy) })
+    }
+
     fn load_refresh_policy(
         &self,
     ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
@@ -76,6 +85,9 @@ async fn fixture(
     let policy = Arc::new(Policy {
         proxy: Mutex::new(proxy.map(|url| OutboundProxy::parse(url).unwrap())),
         reads: AtomicUsize::new(0),
+        rewrite: Mutex::new(
+            gateway_core::provider_ports::SessionRewritePolicy::try_new(1, 1).unwrap(),
+        ),
     });
     let profile = wire_profile();
     let manager = Arc::new(SessionManager::new(
