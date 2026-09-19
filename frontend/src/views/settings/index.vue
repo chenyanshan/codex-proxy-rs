@@ -4,15 +4,14 @@ import { computed, reactive, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
-import ClientProfileEditor from '@/components/client-profile/ClientProfileEditor.vue'
 
 import AccountAutoFreezeCard from './components/AccountAutoFreezeCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
+import ClientProfileCard from './components/ClientProfileCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RequestQueueCard from './components/RequestQueueCard.vue'
@@ -132,9 +131,6 @@ watch(section, (value) => {
           重新加载
         </BaseButton>
       </div>
-      <div v-else-if="loading" role="status" class="rounded-cp-card bg-cp-bg-container p-6 text-cp text-cp-text-secondary shadow-cp-card">
-        正在加载设置…
-      </div>
 
       <SettingsAccessSection
         v-if="visited.has('access')"
@@ -173,9 +169,12 @@ watch(section, (value) => {
 
         <div v-if="visited.has('upstream')" v-show="section === 'upstream'" class="grid min-w-0 gap-5">
           <TokenRefreshCard v-model:refresh-margin-seconds="refreshMarginSecondsValue" v-model:refresh-concurrency="refreshConcurrencyValue" />
-          <BaseCard title="客户端身份" description="配置网关向上游声明的客户端类型、版本与请求头">
-            <ClientProfileEditor v-if="form.openaiClientProfile" v-model="form.openaiClientProfile" :active="section === 'upstream'" :disabled="disabled" class="max-w-6xl" />
-          </BaseCard>
+          <ClientProfileCard
+            v-model:openai="form.openaiClientProfile"
+            v-model:xai="form.xaiClientProfile"
+            :active="section === 'upstream'"
+            :disabled="disabled"
+          />
           <RequestLocationCard v-model="form.requestLocation" v-model:enabled="form.requestLocationEnabled" :disabled="disabled" />
           <ModelAliasesCard
             :mappings="mappings"

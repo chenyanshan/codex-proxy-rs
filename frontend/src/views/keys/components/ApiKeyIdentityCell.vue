@@ -13,8 +13,8 @@ defineProps<{
     <span class="truncate text-cp text-cp-text" :title="apiKey.name">
       {{ apiKey.name }}
     </span>
-    <span class="truncate text-cp-xs font-emphasis text-cp-text-quaternary" :title="apiKey.label || undefined">
-      {{ apiKey.label || '未填写备注' }}
+    <span v-if="apiKey.label" class="truncate text-cp-xs font-emphasis text-cp-text-quaternary" :title="apiKey.label">
+      {{ apiKey.label }}
     </span>
   </div>
 </template>
