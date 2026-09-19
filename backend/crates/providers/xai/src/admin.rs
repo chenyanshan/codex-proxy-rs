@@ -407,6 +407,7 @@ impl ProviderAdmin for XaiAdminProvider {
             return Ok(None);
         }
         Ok(Some(CalculatedBillingBreakdown {
+            long_context_billing_applied: breakdown.long_context_billing_applied(),
             image: None,
             custom_multiplier_bps: breakdown.custom_multiplier_bps(),
             input_amount: currency_cost(breakdown.input_amount())?,

@@ -1308,9 +1308,14 @@ Provider metadata 分别保留 `requestedServiceTier` 与 `upstreamServiceTier` 
 原始 `response.service_tier` 不变。用量中的 Fast 仅表示发送档位，不能证明上游实际加速，本地费用
 估算也不能代替官方账单。档位与费用在请求记录生成时确定；查询不会回填历史档位或重算已存储费用。
 
+`/api/admin/usage/records` 与 `/api/admin/ops/errors` 的记录返回 `clientApiKeyName`，为关联 Key 的当前名称；
+Key 已删除或未关联时为 `null`，不影响记录返回，不包含密钥原文。
+
 本地计价使用[模型定价](#模型定价)的生效规则。缺少内置、同步及人工价格时不生成估价。新请求的本地
 费用明细、有效单价、服务档位与自定义倍率随终态记录持久化，后续改价和清除覆盖不重算历史明细。
-旧记录没有费用快照时仍按内置规则核对总额后补充拆分，核对失败只显示原总额。图像明细通过可选的
+旧记录没有费用快照时仍按内置规则核对总额后补充拆分，核对失败只显示原总额。
+`billing.longContextBillingApplied` 表示已应用长上下文价格区间，与服务档位、自定义倍率独立；
+旧费用快照未记录该事实或只有总额时返回 `false`，不按当前价格倒推历史标识。图像明细通过可选的
 `billing.image` 返回 `inputAmountDisplay`、`cacheReadAmountDisplay`、`inputPriceDisplay` 和
 `cacheReadPriceDisplay`；存在该字段时，普通输入与缓存字段仅表示文本输入，输出字段表示图像输出。
 
