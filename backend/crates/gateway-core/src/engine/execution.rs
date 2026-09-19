@@ -843,12 +843,14 @@ impl DefaultExecutionService {
                     .await);
             }
         };
+        let upstream_response_model = session.upstream_response_model().map(str::to_owned);
         if let Err(error) = session.commit_downstream(Some(200)).await {
             return Err(self
                 .observe_probe_failure(&observed, started_at, &error)
                 .await);
         }
         Ok(AccountProbeResult {
+            upstream_response_model,
             text: events
                 .into_iter()
                 .flat_map(|event| event.into_parts().0)

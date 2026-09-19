@@ -23,10 +23,10 @@ use gateway_admin::{
     model::{
         AdminError, MutationContext, Revision,
         accounts::{
-            AccountConnectionTestEvent, AccountListQuery, AccountPage, AccountPageItem,
-            AccountRecord, AccountRuntimeSnapshot, AccountSummary, AccountUpdateResult,
-            AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
-            BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
+            AccountConnectionTestEvent, AccountConnectionTestMode, AccountListQuery, AccountPage,
+            AccountPageItem, AccountRecord, AccountRuntimeSnapshot, AccountSummary,
+            AccountUpdateResult, AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult,
+            AccountsUpdateResult, BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -1176,6 +1176,7 @@ async fn connection_test_should_probe_unavailable_account() {
         .test_connection(
             ProviderAccountId::new("acct_test").expect("account ID"),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
+            AccountConnectionTestMode::Standard,
         )
         .await
         .expect("connection test stream")
@@ -1199,6 +1200,66 @@ async fn connection_test_should_probe_unavailable_account() {
 }
 
 #[tokio::test]
+async fn connection_test_should_report_the_upstream_response_model() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    let store = FakeAccountStore::new("openai", events());
+    let services = accounts_service(provider, store).await;
+
+    let events = services
+        .accounts()
+        .test_connection(
+            ProviderAccountId::new("acct_test").expect("account ID"),
+            gateway_core::routing::UpstreamModelId::new("gpt-5.6-luna").expect("model"),
+            AccountConnectionTestMode::Standard,
+        )
+        .await
+        .expect("connection test stream")
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(matches!(
+        events.last(),
+        Some(AccountConnectionTestEvent::Completed {
+            upstream_response_model: Some(model),
+        }) if model == "gpt-probe-returned"
+    ));
+}
+
+#[tokio::test]
+async fn model_attribution_probe_should_use_the_server_owned_challenge() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    let store = FakeAccountStore::new("openai", events());
+    let services = accounts_service(provider, store).await;
+
+    let events = services
+        .accounts()
+        .test_connection(
+            ProviderAccountId::new("acct_test").expect("account ID"),
+            gateway_core::routing::UpstreamModelId::new("gpt-5.6-luna").expect("model"),
+            AccountConnectionTestMode::ModelAttribution { probe_index: 2 },
+        )
+        .await
+        .expect("model attribution stream")
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(matches!(
+        events.first(),
+        Some(AccountConnectionTestEvent::Started {
+            probe_index: Some(2),
+            expected_count: Some(313),
+            ..
+        })
+    ));
+    assert!(matches!(
+        events.get(1),
+        Some(AccountConnectionTestEvent::Request { input_text, store: false, .. })
+            if input_text.contains("313 个 1 到 355")
+                && input_text.contains("禁止调用或借助任何工具")
+    ));
+}
+
+#[tokio::test]
 async fn connection_test_rate_limited_probe_returns_provider_failure() {
     let events = events();
     let provider = FakeProviderAdmin::new("xai", events.clone());
@@ -1213,6 +1274,7 @@ async fn connection_test_rate_limited_probe_returns_provider_failure() {
         .test_connection(
             ProviderAccountId::new("acct_test").expect("account ID"),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
+            AccountConnectionTestMode::Standard,
         )
         .await
         .expect("connection test stream")
@@ -1246,6 +1308,7 @@ async fn connection_test_should_preserve_disabled_account_status() {
         .test_connection(
             ProviderAccountId::new("acct_test").expect("account ID"),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
+            AccountConnectionTestMode::Standard,
         )
         .await
         .expect("connection test stream")
@@ -2939,6 +3002,7 @@ impl AccountProbe for SuccessfulAccountProbe {
         Box::pin(async {
             Ok(AccountProbeResult {
                 text: vec!["OK".to_owned()],
+                upstream_response_model: Some("gpt-probe-returned".to_owned()),
             })
         })
     }
