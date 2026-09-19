@@ -274,6 +274,33 @@ async fn xai_admin_provider_validates_known_billing_breakdown() {
 }
 
 #[tokio::test]
+async fn xai_legacy_billing_should_not_infer_long_context_flag() {
+    let bundle = provider_xai::initialize(provider_ports())
+        .await
+        .expect("xAI bundle");
+    let billing = bundle
+        .admin_provider()
+        .calculated_billing(&ProviderBillingInput {
+            upstream_model_id: "grok-4.6".to_owned(),
+            service_tier: None,
+            input_tokens: Some(200_000),
+            output_tokens: Some(0),
+            cached_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            total: CurrencyCost {
+                currency: "USD".to_owned(),
+                amount: "0.8".parse().expect("stored total"),
+            },
+        })
+        .expect("legacy billing")
+        .expect("matching billing breakdown");
+
+    assert_eq!(billing.total_amount.amount.as_str(), "0.8");
+    assert_eq!(billing.input_price_per_million.amount.as_str(), "4");
+    assert!(!billing.long_context_billing_applied);
+}
+
+#[tokio::test]
 async fn xai_admin_provider_restores_full_pending_envelope_and_binds_owner() {
     let pending = Arc::new(TestOAuthPending::default());
     let bundle = provider_xai::initialize(provider_ports_with(

@@ -64,11 +64,11 @@ function itemValueClass(tone?: string, accent?: boolean) {
 
     <span
       v-if="billing?.longContextBillingApplied"
-      class="inline-flex shrink-0 items-center rounded-cp-sm bg-cp-orange-container px-1 py-0.5 font-mono text-cp-xs leading-none font-heavy text-cp-orange-on-container"
+      class="inline-flex shrink-0 items-center rounded-cp-sm bg-cp-orange-container px-1 py-0.5 text-cp-xs leading-none font-heavy whitespace-nowrap text-cp-orange-on-container"
       title="已应用长上下文计费；各项单价见费用明细"
       aria-label="已应用长上下文计费"
     >
-      2x
+      长上下文
     </span>
 
     <UsageDetailPopover v-if="billing" title="计费明细" trigger-label="查看费用明细">
