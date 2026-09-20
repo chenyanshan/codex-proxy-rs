@@ -244,7 +244,7 @@ async fn backend_http_should_send_default_store_and_normalized_system_role() {
         server.await.expect("HTTP server task"),
         json!({
             "model": "gpt-test",
-            "input": [{"type": "message", "role": "developer", "content": "You are Codex, an AI coding assistant. Be concise."}],
+            "input": [{"type": "message", "role": "developer", "content": " Be concise."}],
             "store": false,
             "stream": true
         })
@@ -302,18 +302,18 @@ async fn backend_websocket_should_send_default_store_and_normalized_system_role(
     assert_eq!(body.get("store"), Some(&json!(false)));
     assert_eq!(
         body["input"],
-        json!([{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "You are Codex, an AI coding assistant. Be concise."}]}])
+        json!([{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": " Be concise."}]}])
     );
 }
 
 #[test]
-fn encoder_should_only_replace_the_known_grok_instruction_prefix() {
+fn encoder_should_only_remove_the_known_grok_instruction_prefix() {
     let original =
         "You are Grok released by xAI.\nKeep Grok tool names and xAI examples unchanged.";
-    let replacement =
-        "You are Codex, an AI coding assistant.\nKeep Grok tool names and xAI examples unchanged.";
+    let replacement = "\nKeep Grok tool names and xAI examples unchanged.";
     for role in ["system", "developer"] {
         for (content, expected_content) in [
+            (json!("You are Grok released by xAI."), json!("")),
             (json!(original), json!(replacement)),
             (
                 json!([

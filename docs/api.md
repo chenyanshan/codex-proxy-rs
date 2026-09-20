@@ -198,9 +198,9 @@ Responses 上游编码会移除 Codex 不接受的顶层 `temperature`、`max_ou
 因为 Codex 后端只接受条目数组；数组及其他类型原样透传。`input` 数组中显式指定 `type: "message"`
 且 `role: "system"` 的消息，其角色转换为 Codex 接受的 `developer`。显式 `system` / `developer`
 消息的字符串内容或首个 `input_text` 块，以精确前缀 `You are Grok released by xAI.` 开头时，
-仅将该前缀替换为 `You are Codex, an AI coding assistant.`；其余内容、顺序、字段和顶层
+仅删除该前缀，不注入新的身份声明；其余内容（含空白）、顺序、字段和顶层
 `instructions` 保持不变。不替换用户/助手消息、后续内容块、工具或嵌套字段中的品牌引用。
-这不是官方 Codex 提示词，也不是客户端等价保证；提示词前缀变化可能使原缓存暂时无法命中。
+这不等于使用官方 Codex 提示词，也不是客户端等价保证；提示词前缀变化可能使原缓存暂时无法命中。
 HTTP/SSE 与 WebSocket 共用这些正文适配规则。
 `prompt_cache_key`、`reasoning`、`include` 等 Codex 参数继续保留。过滤只作用于顶层，
 不删除工具参数 schema、输入内容或 `client_metadata` 内的同名业务字段；其他未知字段继续透传。
@@ -210,7 +210,7 @@ Codex/OAuth 上游的历史回填按字段形状兼容，不以 User-Agent 品�
 `content`。其他字段及顺序保持不变，缺少非空加密载荷的明文历史由上游判定。
 普通消息、工具项及未知类型不受此规则影响，API Key 上游不应用此规则。
 
-请求头过滤与上述自我介绍替换不提供客户端匿名化或账户风控保证；其余系统提示词、工具定义、
+请求头过滤与上述自我介绍删除不提供客户端匿名化或账户风控保证；其余系统提示词、工具定义、
 工具结果、工作目录及其他业务 metadata 保持原有语义，仍可能包含客户端环境信息。
 
 Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行。当前响应期间收到的后续业务帧

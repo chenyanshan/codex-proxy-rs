@@ -90,8 +90,8 @@ pub(in crate::transport) fn normalize_codex_request_body(body: &mut Map<String, 
     }
 }
 
-// 只替换已观察到的 Grok 指令开场白，不递归改写工具、用户输入或后续品牌引用。
-// 这是调用方身份适配，不是官方 Codex 提示词；保留余下指令及内容块边界。
+// 只删除已观察到的 Grok 指令开场白，不递归改写工具、用户输入或后续品牌引用。
+// 不注入自行拟定的 Codex 身份声明；保留余下指令的原始字节及内容块边界。
 fn normalize_grok_instruction_identity(content: &mut Value) {
     let text = match content {
         Value::String(text) => Some(text),
@@ -109,9 +109,6 @@ fn normalize_grok_instruction_identity(content: &mut Value) {
     if let Some(text) = text
         && text.starts_with("You are Grok released by xAI.")
     {
-        text.replace_range(
-            .."You are Grok released by xAI.".len(),
-            "You are Codex, an AI coding assistant.",
-        );
+        text.replace_range(.."You are Grok released by xAI.".len(), "");
     }
 }

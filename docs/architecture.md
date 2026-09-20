@@ -224,7 +224,7 @@ OpenAI 模型目录用于发现，不因目录缺项拒绝请求；管理员配�
   `transport/headers.rs` 负责上游身份保护和官方头组装；缺少明确会话与线程身份时，
   使用已有 `prompt_cache_key` 补齐上游 `session-id`，不改写正文或本地续写身份。
   会话别名只规范化请求头，不清除正文身份字段；未知业务扩展与响应诊断头不受影响，字段见
-  [Responses 合同](api.md#3-openai-数据面与模型目录)。已知 Grok 指令开场白的精确前缀替换
+  [Responses 合同](api.md#3-openai-数据面与模型目录)。已知 Grok 指令开场白的精确前缀删除
   归属 `downstream/body.rs`，具体形状与保留边界见同一合同；不做递归品牌清洗，
   也不承诺与官方 Codex 客户端等价。
 - xAI 是翻译边界。Provider 把 Grok wire 转换为 Responses wire；上游结构化错误的 message/code/type
