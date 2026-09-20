@@ -12,6 +12,34 @@ use tracing::{
 };
 
 #[test]
+fn cache_usage_distinguishes_missing_zero_and_hits_without_payloads() {
+    for (details, expected) in [
+        (
+            json!({}),
+            json!({"cachedTokens": null, "cacheWriteTokens": null}),
+        ),
+        (
+            json!({"cached_tokens": 0}),
+            json!({"cachedTokens": 0, "cacheWriteTokens": null}),
+        ),
+        (
+            json!({"cached_tokens": 4096, "cache_write_tokens": 1024}),
+            json!({"cachedTokens": 4096, "cacheWriteTokens": 1024}),
+        ),
+    ] {
+        let trace = TraceContext::new("req_cache_usage");
+        let response = json!({"type": "response.completed", "response": {
+            "output": [{"text": "private prompt content"}],
+            "usage": {"input_tokens_details": details},
+        }});
+        trace.capture("upstream.event", &serde_json::to_vec(&response).unwrap());
+        let snapshot = trace.snapshot().unwrap();
+        assert_eq!(snapshot["events"][0]["data"]["cacheUsage"], expected);
+        assert!(!snapshot.to_string().contains("private prompt content"));
+    }
+}
+
+#[test]
 fn bounded_history_preserves_start_failure_and_final_result() {
     let trace = TraceContext::new("req_trace");
     trace.record("request.started", json!({}));

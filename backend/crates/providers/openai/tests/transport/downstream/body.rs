@@ -220,7 +220,7 @@ async fn backend_http_should_send_default_store_and_normalized_system_role() {
     });
     let mut request = encode_downstream_request(json!({
         "model": "gpt-test",
-        "input": [{"type": "message", "role": "system", "content": "Be concise."}]
+        "input": [{"type": "message", "role": "system", "content": "You are Grok released by xAI. Be concise."}]
     }));
     request.force_http_sse = true;
     let client = CodexBackendClient::new(
@@ -244,7 +244,7 @@ async fn backend_http_should_send_default_store_and_normalized_system_role() {
         server.await.expect("HTTP server task"),
         json!({
             "model": "gpt-test",
-            "input": [{"type": "message", "role": "developer", "content": "Be concise."}],
+            "input": [{"type": "message", "role": "developer", "content": "You are Codex, an AI coding assistant. Be concise."}],
             "store": false,
             "stream": true
         })
@@ -277,7 +277,7 @@ async fn backend_websocket_should_send_default_store_and_normalized_system_role(
     });
     let mut request = encode_downstream_request(json!({
         "model": "gpt-test",
-        "input": [{"type": "message", "role": "system", "content": "Be concise."}]
+        "input": [{"type": "message", "role": "system", "content": [{"type": "input_text", "text": "You are Grok released by xAI. Be concise."}]}]
     }));
     request.use_websocket = true;
     let client = CodexBackendClient::new(
@@ -302,8 +302,68 @@ async fn backend_websocket_should_send_default_store_and_normalized_system_role(
     assert_eq!(body.get("store"), Some(&json!(false)));
     assert_eq!(
         body["input"],
-        json!([{"type": "message", "role": "developer", "content": "Be concise."}])
+        json!([{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "You are Codex, an AI coding assistant. Be concise."}]}])
     );
+}
+
+#[test]
+fn encoder_should_only_replace_the_known_grok_instruction_prefix() {
+    let original =
+        "You are Grok released by xAI.\nKeep Grok tool names and xAI examples unchanged.";
+    let replacement =
+        "You are Codex, an AI coding assistant.\nKeep Grok tool names and xAI examples unchanged.";
+    for role in ["system", "developer"] {
+        for (content, expected_content) in [
+            (json!(original), json!(replacement)),
+            (
+                json!([
+                    {"type": "input_text", "text": original, "future": "Grok"},
+                    {"type": "input_text", "text": original}
+                ]),
+                json!([
+                    {"type": "input_text", "text": replacement, "future": "Grok"},
+                    {"type": "input_text", "text": original}
+                ]),
+            ),
+        ] {
+            let mut body = json!({
+                "model": "gpt-test",
+                "instructions": "Keep the existing top-level instructions.",
+                "input": [{"type": "message", "role": role, "content": content}],
+                "tools": [{"type": "function", "name": "grok", "description": original}],
+                "prompt_cache_key": "unchanged-key",
+                "store": false
+            });
+            let encoded = encode_downstream_request(body.clone());
+            body["input"][0]["role"] = json!("developer");
+            body["input"][0]["content"] = expected_content;
+            assert_eq!(Value::Object(encoded.body().clone()), body);
+            let encoded_again = encode_downstream_request(body.clone());
+            assert_eq!(Value::Object(encoded_again.body().clone()), body);
+        }
+    }
+    for item in [
+        json!({"type": "message", "role": "user", "content": original}),
+        json!({"type": "message", "role": "assistant", "content": original}),
+        json!({"type": "message", "role": "developer", "content": "You are Codex, a coding agent."}),
+        json!({"type": "message", "role": "developer", "content": format!("Quoted example: {original}")}),
+        json!({"type": "message", "role": "developer", "content": [
+            {"type": "input_text", "text": "Existing guidance."},
+            {"type": "input_text", "text": original}
+        ]}),
+        json!({"type": "message", "role": "developer", "content": [{"type": "future", "text": original}]}),
+        json!({"type": "message", "role": "developer", "content": []}),
+        json!({"type": "message", "role": "developer", "content": null}),
+        json!({"type": "message", "role": "developer", "content": {"text": original}}),
+        json!({"role": "system", "content": original}),
+        json!({"type": "future", "role": "system", "content": original}),
+    ] {
+        let body = json!({"model": "gpt-test", "input": [item], "store": false});
+        assert_eq!(
+            Value::Object(encode_downstream_request(body.clone()).body().clone()),
+            body
+        );
+    }
 }
 
 fn encode_downstream_request(body: Value) -> CodexResponsesRequest {

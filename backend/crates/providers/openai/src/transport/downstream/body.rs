@@ -57,16 +57,22 @@ pub(in crate::transport) fn normalize_codex_request_body(body: &mut Map<String, 
     }
 
     // Codex 上游拒绝显式 message 的 system role；沿用官方客户端的 developer
-    // role 承载指令，只转换已确认的消息形状，保留内容与其他字段。
+    // role 承载指令，只转换已确认的消息形状；已知客户端自我介绍单独适配。
     if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input {
             let Some(item) = item.as_object_mut() else {
                 continue;
             };
-            if item.get("type").and_then(Value::as_str) == Some("message")
-                && item.get("role").and_then(Value::as_str) == Some("system")
-            {
+            if item.get("type").and_then(Value::as_str) != Some("message") {
+                continue;
+            }
+            if item.get("role").and_then(Value::as_str) == Some("system") {
                 item.insert("role".to_owned(), Value::String("developer".to_owned()));
+            }
+            if item.get("role").and_then(Value::as_str) == Some("developer")
+                && let Some(content) = item.get_mut("content")
+            {
+                normalize_grok_instruction_identity(content);
             }
         }
     }
@@ -81,5 +87,31 @@ pub(in crate::transport) fn normalize_codex_request_body(body: &mut Map<String, 
         "prompt_cache_retention",
     ] {
         body.remove(field);
+    }
+}
+
+// 只替换已观察到的 Grok 指令开场白，不递归改写工具、用户输入或后续品牌引用。
+// 这是调用方身份适配，不是官方 Codex 提示词；保留余下指令及内容块边界。
+fn normalize_grok_instruction_identity(content: &mut Value) {
+    let text = match content {
+        Value::String(text) => Some(text),
+        Value::Array(parts) => parts.first_mut().and_then(|part| {
+            if part.get("type").and_then(Value::as_str) != Some("input_text") {
+                return None;
+            }
+            match part.get_mut("text") {
+                Some(Value::String(text)) => Some(text),
+                _ => None,
+            }
+        }),
+        _ => None,
+    };
+    if let Some(text) = text
+        && text.starts_with("You are Grok released by xAI.")
+    {
+        text.replace_range(
+            .."You are Grok released by xAI.".len(),
+            "You are Codex, an AI coding assistant.",
+        );
     }
 }

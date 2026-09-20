@@ -24,9 +24,11 @@ pub(in crate::transport) fn is_non_codex_request_header(name: &str) -> bool {
         || name.starts_with("x-xai-")
         || matches!(
             name,
+            // Grok 的响应认证协商头不在 x-grok-/x-xai- 命名空间内，同样不能跨 Provider。
+            "x-authenticateresponse"
             // Forwarded、Via、CDN-Loop 有 RFC 定义；剥离是本应用重建
             // Provider 请求的策略，不是通用 HTTP 代理的协议要求。
-            "forwarded"
+                | "forwarded"
                 | "via"
                 | "cdn-loop"
                 // Nginx/代理与 Cloudflare 使用的原始访客地址。
