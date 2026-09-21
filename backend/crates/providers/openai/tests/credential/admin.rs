@@ -895,6 +895,103 @@ async fn api_key_import_export_preserves_target_without_oauth_exchange() {
     );
 }
 
+/// API Key 导入文档要接受 `modelPresentationOverrides`，并能在导出/再导入之间保持。
+#[tokio::test]
+async fn api_key_import_parses_and_round_trips_model_presentation_overrides() {
+    use gateway_core::account::LoadedCredential;
+    use provider_openai::credential::{
+        ApiKeyModelPresentationOverride, CodexCredentialAdmin, CodexCredentialData,
+        ExportManagedCodexCredential,
+    };
+
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let imported = service
+        .prepare_import_document(serde_json::json!({
+            "provider": "openai", "authentication_kind": "api_key", "name": "relay",
+            "base_url": "https://relay.example/custom/v2", "api_key": "sk-test-only",
+            "modelPresentationOverrides": {
+                "Qwen3.8-27B": {"imageInput": true, "imageDetailOriginal": false},
+                "plain": {"imageInput": true}
+            }
+        }))
+        .await
+        .expect("import API account")
+        .into_accounts()
+        .pop()
+        .expect("one account");
+    let expected = std::collections::BTreeMap::from([
+        (
+            "Qwen3.8-27B".to_owned(),
+            ApiKeyModelPresentationOverride {
+                image_input: true,
+                image_detail_original: false,
+            },
+        ),
+        // 只写 imageInput 时 detail original 保持默认 false，两个字段互相独立。
+        (
+            "plain".to_owned(),
+            ApiKeyModelPresentationOverride {
+                image_input: true,
+                image_detail_original: false,
+            },
+        ),
+    ]);
+    assert_eq!(presentation_overrides(&imported.credential), expected);
+    assert!(
+        service
+            .prepare_import_document(serde_json::json!({
+                "provider": "openai", "authentication_kind": "api_key", "name": "relay",
+                "base_url": "https://relay.example/custom/v2", "api_key": "sk-test-only",
+                "modelPresentationOverrides": {"__reserved": {"imageInput": true}}
+            }))
+            .await
+            .is_err(),
+        "覆盖键必须与目录模型标识同规则"
+    );
+    let now = Utc::now();
+    let document = CodexCredentialAdmin
+        .format_cpr_export(vec![ExportManagedCodexCredential {
+            current: LoadedCredential {
+                account: imported.account,
+                credential: imported.credential,
+            },
+            added_at: now,
+            updated_at: now,
+        }])
+        .expect("export")
+        .into_json()
+        .expect("JSON");
+    let restored = service
+        .prepare_import_document(document)
+        .await
+        .expect("reimport")
+        .into_accounts()
+        .pop()
+        .expect("one account");
+    let CodexCredentialData::ApiKey(data) =
+        CodexCredentialCodec::decode_complete(&restored.credential).unwrap()
+    else {
+        panic!("API credential")
+    };
+    assert_eq!(data.model_presentation_overrides, expected);
+}
+
+fn presentation_overrides(
+    credential: &gateway_core::account::PlaintextCredential,
+) -> std::collections::BTreeMap<String, provider_openai::credential::ApiKeyModelPresentationOverride>
+{
+    match CodexCredentialCodec::decode_complete(credential).expect("plaintext credential") {
+        provider_openai::credential::CodexCredentialData::ApiKey(data) => {
+            data.model_presentation_overrides
+        }
+        provider_openai::credential::CodexCredentialData::OAuth(_) => panic!("API credential"),
+    }
+}
+
 #[tokio::test]
 async fn api_key_import_rejects_unsafe_urls_and_empty_keys() {
     let service = CodexCredentialAdminService::new(

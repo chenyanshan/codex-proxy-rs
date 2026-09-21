@@ -68,6 +68,20 @@ impl MemoryAccountStore {
         base_url: String,
         transport: provider_openai::credential::ApiKeyTransport,
     ) {
+        self.seed_api_key_with_presentation_overrides(id, base_url, transport, BTreeMap::new())
+            .await;
+    }
+
+    pub(crate) async fn seed_api_key_with_presentation_overrides(
+        &self,
+        id: &str,
+        base_url: String,
+        transport: provider_openai::credential::ApiKeyTransport,
+        model_presentation_overrides: BTreeMap<
+            String,
+            provider_openai::credential::ApiKeyModelPresentationOverride,
+        >,
+    ) {
         let credential = provider_openai::credential::CodexCredentialCodec::encode_complete(
             provider_openai::credential::CodexCredentialData::ApiKey(
                 provider_openai::credential::ApiKeyCredentialData {
@@ -76,6 +90,7 @@ impl MemoryAccountStore {
                     base_url,
                     api_key: "sk-api-test-only".to_owned(),
                     transport,
+                    model_presentation_overrides,
                 },
             ),
         )
