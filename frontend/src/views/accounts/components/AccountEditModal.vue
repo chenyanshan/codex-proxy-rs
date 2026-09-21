@@ -10,6 +10,7 @@ import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountApiKeyFields from './AccountApiKeyFields.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
+import AccountModelCapabilitiesField from './AccountModelCapabilitiesField.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
@@ -74,6 +75,12 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
           上游设置读取失败，请关闭后重试
         </p>
         <AccountApiKeyFields v-else v-model="apiKey" editing :disabled="saving" />
+        <AccountModelCapabilitiesField
+          v-if="configurationReady"
+          v-model="apiKey.modelPresentationOverrides"
+          :account-id="account.id"
+          :disabled="saving"
+        />
       </section>
 
       <AccountSettingsFields

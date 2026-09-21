@@ -642,6 +642,12 @@ export function completeAccountOAuth(data: AccountOAuthCompleteParam) {
 export interface ApiKeyConfiguration {
   base_url: string
   transport: 'http' | 'prefer_websocket'
+  modelPresentationOverrides?: Record<string, ModelPresentationOverride>
+}
+
+export interface ModelPresentationOverride {
+  imageInput: boolean
+  imageDetailOriginal: boolean
 }
 
 export function getAccountDetail(data: AccountIdParam, options: RequestOptions = {}) {
@@ -653,7 +659,7 @@ export function getAccountDetail(data: AccountIdParam, options: RequestOptions =
   })
 }
 
-export function updateAccountApiKey(data: { accountId: string, baseUrl: string, transport: ApiKeyConfiguration['transport'], apiKey?: string, settings?: AccountUpdateParam }) {
+export function updateAccountApiKey(data: { accountId: string, baseUrl: string, transport: ApiKeyConfiguration['transport'], apiKey?: string, modelPresentationOverrides?: ApiKeyConfiguration['modelPresentationOverrides'], settings?: AccountUpdateParam }) {
   return request<{ accountId: string }>({
     url: '/api/admin/accounts/rotate',
     method: 'POST',

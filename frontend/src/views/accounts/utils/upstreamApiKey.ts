@@ -6,7 +6,7 @@ export interface ApiKeyAccountForm extends ApiKeyConfiguration {
 }
 
 export function emptyApiKeyAccountForm(): ApiKeyAccountForm {
-  return { name: '', base_url: '', apiKey: '', transport: 'http' }
+  return { name: '', base_url: '', apiKey: '', transport: 'http', modelPresentationOverrides: {} }
 }
 
 export function apiKeyAccountError(form: ApiKeyAccountForm, editing = false): string | undefined {

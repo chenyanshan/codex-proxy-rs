@@ -44,6 +44,7 @@ export function useAccountEditor(options: {
       if (!detail.credentialConfiguration)
         throw new Error('该账号没有 API Key 上游设置')
       apiKey.value = { ...emptyApiKeyAccountForm(), ...detail.credentialConfiguration }
+      apiKey.value.modelPresentationOverrides = { ...detail.credentialConfiguration.modelPresentationOverrides }
       savedConfiguration.value = detail.credentialConfiguration
       configurationReady.value = true
     }
@@ -125,9 +126,10 @@ export function useAccountEditor(options: {
         apiKey.value.apiKey !== ''
         || apiKey.value.base_url.trim() !== savedConfiguration.value?.base_url
         || apiKey.value.transport !== savedConfiguration.value?.transport
+        || JSON.stringify(apiKey.value.modelPresentationOverrides ?? {}) !== JSON.stringify(savedConfiguration.value?.modelPresentationOverrides ?? {})
       )
       if (connectionChanged) {
-        await updateAccountApiKey({ accountId, baseUrl: apiKey.value.base_url.trim(), transport: apiKey.value.transport, apiKey: apiKey.value.apiKey || undefined, settings })
+        await updateAccountApiKey({ accountId, baseUrl: apiKey.value.base_url.trim(), transport: apiKey.value.transport, apiKey: apiKey.value.apiKey || undefined, modelPresentationOverrides: apiKey.value.modelPresentationOverrides ?? {}, settings })
       }
       else {
         await updateAccount(settings)
