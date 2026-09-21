@@ -463,6 +463,8 @@ impl CodexCredentialAdmin {
             base_url: String,
             transport: ApiKeyTransport,
             api_key: Option<String>,
+            #[serde(default, rename = "modelPresentationOverrides")]
+            model_presentation_overrides: Option<BTreeMap<String, ApiKeyModelPresentationOverride>>,
         }
         let rotation: Rotation = serde_json::from_value(material)
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
@@ -476,6 +478,9 @@ impl CodexCredentialAdmin {
         data.transport = rotation.transport;
         if let Some(api_key) = rotation.api_key {
             data.api_key = api_key;
+        }
+        if let Some(overrides) = rotation.model_presentation_overrides {
+            data.model_presentation_overrides = overrides;
         }
         let credential = CodexCredentialCodec::encode_complete(CodexCredentialData::ApiKey(data))
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;

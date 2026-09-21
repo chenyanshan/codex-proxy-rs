@@ -639,6 +639,28 @@ mod actions {
     }
 
     #[test]
+    fn api_key_rotation_accepts_model_presentation_overrides_only_with_base_url() {
+        let rotation: RotateAccountRequest = serde_json::from_value(json!({
+            "provider": "openai",
+            "accountId": "acct_api",
+            "baseUrl": "https://api.example.invalid/v1",
+            "transport": "http",
+            "modelPresentationOverrides": {"Qwen3.8-27B": {"imageInput": true}}
+        }))
+        .expect("decode rotation with presentation overrides");
+        rotation.validate().expect("accept presentation overrides");
+
+        let oauth: RotateAccountRequest = serde_json::from_value(json!({
+            "provider": "openai",
+            "accountId": "acct_api",
+            "accessToken": "header.payload.signature",
+            "modelPresentationOverrides": {"Qwen3.8-27B": {"imageInput": true}}
+        }))
+        .expect("decode OAuth rotation");
+        assert_eq!(oauth.validate().unwrap_err().field(), "credential");
+    }
+
+    #[test]
     fn credential_recovery_requests_should_not_accept_client_revision_fences() {
         let authorization: StartAccountAuthorizationRequest = serde_json::from_value(json!({
             "provider": "openai",

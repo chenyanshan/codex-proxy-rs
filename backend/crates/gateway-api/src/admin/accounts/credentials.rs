@@ -325,6 +325,8 @@ pub struct RotateAccountRequest {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub transport: Option<String>,
+    /// API Key 账号的模型展示能力覆盖；键为上游模型 ID，省略时保留既有覆盖。
+    pub model_presentation_overrides: Option<Map<String, Value>>,
     pub settings: Option<UpdateAccountRequest>,
 }
 
@@ -357,7 +359,10 @@ impl RotateAccountRequest {
             }
             Ok(())
         } else {
-            if self.api_key.is_some() || self.transport.is_some() {
+            if self.api_key.is_some()
+                || self.transport.is_some()
+                || self.model_presentation_overrides.is_some()
+            {
                 return Err(WireValidationError::new("credential"));
             }
             validate_oauth_material(
@@ -384,6 +389,12 @@ impl RotateAccountRequest {
             );
             if let Some(key) = self.api_key {
                 material.insert("api_key".to_owned(), Value::String(key));
+            }
+            if let Some(overrides) = self.model_presentation_overrides {
+                material.insert(
+                    "modelPresentationOverrides".to_owned(),
+                    Value::Object(overrides),
+                );
             }
         } else {
             material.insert(
