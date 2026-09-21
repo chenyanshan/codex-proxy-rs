@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { OutboundProxyRecord } from '@/api'
+import type { OutboundProxyRecord, OutboundProxyTest } from '@/api'
 import { LockKeyhole, MapPin, Pencil, Plus, Search, Trash2, Users, Wifi } from '@lucide/vue'
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
@@ -20,6 +20,7 @@ import { formatDateTime } from '@/utils/date'
 import { normalizeRequestLocation, requestLocationError } from '@/utils/request-location'
 import ProxyAccountsModal from './components/ProxyAccountsModal.vue'
 import ProxyFormModal from './components/ProxyFormModal.vue'
+import { effectiveProxyLocation, locationDetectionWarning } from './utils/location'
 
 const search = shallowRef('')
 const query = usePagedQuery({
@@ -43,8 +44,10 @@ const form = reactive({
   name: '',
   proxyUrl: '',
   customLocation: false,
+  autoLocation: false,
   location: { country: '', region: '', city: '', timezone: '' },
 })
+const formTestResult = shallowRef<OutboundProxyTest | null>(null)
 const saveAction = useAsyncAction()
 const { loading: saving } = saveAction
 const deleteAction = useAsyncAction()
@@ -61,6 +64,8 @@ function openForm(proxy: OutboundProxyRecord | null = null) {
   editing.value = proxy
   form.name = proxy?.name ?? ''
   form.proxyUrl = ''
+  form.autoLocation = proxy?.autoLocation ?? false
+  formTestResult.value = null
   form.customLocation = proxy?.location != null
   form.location = proxy?.location ? { ...proxy.location } : { country: '', region: '', city: '', timezone: '' }
   showForm.value = true
@@ -72,7 +77,14 @@ async function checkProxy(proxy: OutboundProxyRecord) {
   testingIds.value.add(proxy.id)
   try {
     const result = await testProxy({ id: proxy.id, revision: proxy.revision })
-    if (result.lastTest?.success)
+    if (editing.value?.id === result.id) {
+      editing.value = result
+      formTestResult.value = result.lastTest
+    }
+    const warning = result.autoLocation ? locationDetectionWarning(result.lastTest) : ''
+    if (warning)
+      toast.warning(`${result.name}：${warning}`)
+    else if (result.lastTest?.success)
       toast.success(`${result.name}：连接成功`)
     else
       toast.error(result.lastTest?.message ?? '代理测试失败')
@@ -98,8 +110,12 @@ async function testConnection() {
   }
   await formTestAction.run(async () => {
     // 新地址只做探测，保存前不修改代理及关联账号的连接配置。
-    const result = await probeProxy({ proxyUrl })
-    if (result.success)
+    const result = await probeProxy({ proxyUrl, detectLocation: form.autoLocation })
+    formTestResult.value = result
+    const warning = locationDetectionWarning(result)
+    if (warning)
+      toast.warning(warning)
+    else if (result.success)
       toast.success(`连接成功，耗时 ${result.latencyMs} ms`)
     else
       toast.error(result.message)
@@ -115,9 +131,9 @@ async function save() {
     toast.warning('请填写代理名称和连接地址')
     return
   }
-  const location = form.customLocation
-    ? normalizeRequestLocation(form.location)
-    : null
+  const location = form.autoLocation
+    ? editing.value?.location ?? null
+    : form.customLocation ? normalizeRequestLocation(form.location) : null
   const locationError = location ? requestLocationError(location) : ''
   if (locationError) {
     toast.warning(locationError)
@@ -125,22 +141,28 @@ async function save() {
   }
   await saveAction.run(async () => {
     // 编辑时留空保留已保存的地址和认证，不能用脱敏地址覆盖原连接。
-    await (editing.value
+    const result = await (editing.value
       ? updateProxy({
           id: editing.value.id,
           revision: editing.value.revision,
           name,
+          autoLocation: form.autoLocation,
           proxyUrl: proxyUrl || undefined,
           location,
         })
       : createProxy({
           name,
+          autoLocation: form.autoLocation,
           proxyUrl,
           location,
         }))
     showForm.value = false
     form.proxyUrl = ''
-    toast.success('代理已保存')
+    const warning = result.record.autoLocation ? locationDetectionWarning(result.record.lastTest) : ''
+    if (warning)
+      toast.warning(`代理已保存，${warning}`)
+    else
+      toast.success('代理已保存')
     search.value = ''
     query.page.value = 1
     await query.execute()
@@ -173,6 +195,10 @@ function setPageSize(size: number) {
   query.pageSize.value = size
   setPage(1)
 }
+
+watch(() => form.proxyUrl, () => {
+  formTestResult.value = null
+})
 
 watch(showForm, (open) => {
   if (!open) {
@@ -220,10 +246,14 @@ onMounted(() => void query.execute())
                   <LockKeyhole v-if="row.hasAuthentication" class="size-3 shrink-0" aria-label="已保存代理认证" />
                   <span class="truncate font-mono" :title="row.endpoint">{{ row.endpoint }}</span>
                 </span>
-                <span v-if="row.location" class="flex min-w-0 items-center gap-1 text-cp-xs text-cp-text-secondary" :title="`${row.location.country} / ${row.location.region} / ${row.location.city} · ${row.location.timezone}`">
+                <span v-if="effectiveProxyLocation(row)" class="flex min-w-0 items-center gap-1 text-cp-xs text-cp-text-secondary">
                   <MapPin class="size-3 shrink-0" aria-hidden="true" />
-                  <span class="truncate">{{ row.location.city }} · {{ row.location.timezone }}</span>
+                  <span class="truncate" :title="`${effectiveProxyLocation(row)?.city} · ${effectiveProxyLocation(row)?.timezone}`">{{ row.autoLocation ? '自动 · ' : '' }}{{ effectiveProxyLocation(row)?.city }} · {{ effectiveProxyLocation(row)?.timezone }}</span>
                 </span>
+                <span v-if="row.autoLocation && locationDetectionWarning(row.lastTest)" class="text-cp-xs text-cp-warning-text" :title="locationDetectionWarning(row.lastTest)">
+                  {{ row.detectedLocation ? '检测失败，沿用上次位置' : '自动位置未生效' }}
+                </span>
+                <span v-else-if="row.autoLocation && !row.detectedLocation" class="text-cp-xs text-cp-text-secondary">等待检测位置</span>
               </div>
             </template>
             <template #exitIp="{ row }">
@@ -285,7 +315,9 @@ onMounted(() => void query.execute())
       v-model:name="form.name"
       v-model:proxy-url="form.proxyUrl"
       v-model:custom-location="form.customLocation"
+      v-model:auto-location="form.autoLocation"
       v-model:location="form.location"
+      :test-result="formTestResult"
       :proxy="editing"
       :saving="saving"
       :testing="testingForm"

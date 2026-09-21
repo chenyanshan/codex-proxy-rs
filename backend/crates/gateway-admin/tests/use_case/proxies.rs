@@ -97,14 +97,14 @@ impl ProxyStore for TestProxies {
         _: Revision,
         _: ProxyTestResult,
         _: &MutationContext,
-    ) -> AdminStoreResult<ProxyRecord> {
+    ) -> AdminStoreResult<ProxyMutation> {
         Err(super::unavailable("proxy"))
     }
 }
 
 #[async_trait]
 impl ProxyProbe for TestProxies {
-    async fn test(&self, _: &OutboundProxy) -> ProxyTestResult {
+    async fn test(&self, _: &OutboundProxy, _: bool) -> ProxyTestResult {
         panic!("unexpected proxy probe")
     }
 }
@@ -124,6 +124,8 @@ async fn authorization_uses_selected_proxy_regardless_of_probe_status() {
                 .accounts(FakeAccountStore::new(kind, events.clone()))
                 .proxies(Arc::new(TestProxies {
                     record: Some(ProxyRecord {
+                        auto_location: false,
+                        detected_location: None,
                         location: None,
                         id: "proxy_oauth".to_owned(),
                         name: "授权出口".to_owned(),
@@ -132,6 +134,7 @@ async fn authorization_uses_selected_proxy_regardless_of_probe_status() {
                         account_count: 0,
                         last_test_at: probe_success.map(|_| now),
                         last_test: probe_success.map(|success| ProxyTestResult {
+                            location: Default::default(),
                             success,
                             latency_ms: 10,
                             exit_ip: None,

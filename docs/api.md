@@ -505,13 +505,14 @@ Images、独立 Search 及管理员连接测试不受该文本模型限制；连
 | `GET` | `/api/admin/proxies` | `page`、`pageSize`（1-200）、`search`（名称） | `{ items, page }` |
 | `GET` | `/api/admin/proxies/accounts` | `proxyId`、`page`、`pageSize`（1-200）、`search`（账号名称或邮箱） | `{ items, page }` |
 | `POST` | `/api/admin/proxies/accounts/remove` | `{ proxyId, accountId }` | `{ configRevision }` |
-| `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl, location? }` | `201 { record, configRevision }` |
-| `POST` | `/api/admin/proxies/update` | `{ id, revision, name, proxyUrl?, location? }` | `{ record, configRevision }` |
+| `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl, location?, autoLocation? }` | `201 { record, configRevision }` |
+| `POST` | `/api/admin/proxies/update` | `{ id, revision, name, proxyUrl?, location?, autoLocation? }` | `{ record, configRevision }` |
+| `POST` | `/api/admin/proxies/probe` | `{ proxyUrl, detectLocation? }` | 未保存地址的检测结果，不修改配置 |
 | `POST` | `/api/admin/proxies/test` | `{ id, revision }` | 最新代理记录 / Proxy record with test result |
 | `POST` | `/api/admin/proxies/delete` | `{ id, revision }` | `{ configRevision }` |
 
-`record` 包含 `id`、`name`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、`location`、
-`lastTestAt`、`lastTest: { success, latencyMs, exitIp, exitIpv4, exitIpv6, message }`、`createdAt`、`updatedAt`。
+`record` 包含 `id`、`name`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、`location`、`autoLocation`、
+`detectedLocation`、`lastTestAt`、`lastTest: { success, latencyMs, exitIp, exitIpv4, exitIpv6, message, location }`、`createdAt`、`updatedAt`。
 未测试时 `lastTestAt` / `lastTest` 为 `null`。连通性失败返回 HTTP 200 和 `lastTest.success=false`；
 记录版本过期、重复 URL、删除已绑定的代理返回 409，并发测试满载返回 429。
 
@@ -531,6 +532,19 @@ Images、独立 Search 及管理员连接测试不受该文本模型限制；连
 创建时省略或 `null` 表示继承全局；更新时省略表示保留，`null` 清除覆盖，完整对象替换覆盖。
 只改位置不清空连通性测试结果，也不更改账号凭据版本。
 
+`autoLocation` 创建时默认 `false`，更新省略时保留。开启后使用自动识别的位置，`location` 仍保存原有手动配置，
+关闭开关恢复手动配置或全局继承。首次开启及更改连接地址时自动检测一次，之后只有显式调用 `/proxies/test`
+才刷新，不后台轮询，也不在模型请求中查询。修改名称或手动位置不会触发刷新。
+`detectedLocation` 为 `null` 或 `{ location, exitIpv4, exitIpv6, detectedAt }`，记录已验证的完整位置、对应出口和识别时间。
+自动模式尚无有效识别结果时，使用已开启的全局位置，否则保留客户端原值。
+
+`lastTest.location` 与连通性成功独立，形状为 `{ status: "notRequested" }`、
+`{ status: "detected", location }`、`{ status: "failed", message }` 或 `{ status: "conflict" }`。
+地区查询失败不改变 `lastTest.success`。出口未变化或本次未能获取出口时保留上次成功位置并显示失败状态；
+已知出口变化而查询失败、双栈识别时区不一致时撤销旧自动位置。修改连接地址或切换自动模式清除原检测位置。
+自动模式的手动测试会推进代理 `revision`，调用方应使用返回的新版本继续编辑，以拒绝过期或并发检测结果。
+`probe` 的 `detectLocation` 默认 `false`，为 `true` 时返回地区识别结果，但不会保存或改变任何账号的位置。
+
 关联账号的 OpenAI/Codex Responses 请求（HTTP/SSE、WebSocket）优先使用代理位置，否则使用全局
 运行设置中已开启的 `requestLocation`；两者均未开启时保留客户端原有位置和时区。全局覆盖按请求冻结，
 新请求使用保存后的设置，无需重启；代理覆盖在每次执行时读取，
@@ -539,6 +553,9 @@ Images、独立 Search 及管理员连接测试不受该文本模型限制；连
 
 测试经代理并发访问 IPv4 专用端点 `https://api.ipify.org?format=json` 与 IPv6 专用端点 `https://api6.ipify.org?format=json`，
 分别验证并记录双栈出口（IPv4 与 IPv6 地址），在任一地址族可用时即判定连接成功。超时 15 秒，每进程最多同时测试 4 条。
+自动位置检测额外经同一代理访问 `https://ipwho.is/{出口IP}`，查询 IPv4/IPv6 各自的国家、地区、城市和 IANA 时区，
+地理位置阶段最多等待 7 秒。双栈时区一致时使用 IPv4 的完整位置，单栈使用可用出口；查询失败、字段缺失或无效时区
+不会推测位置。该服务的免费接口有调用限额，限流时返回独立的地理位置失败状态，可稍后手动重试。
 探测器复用 OpenAI 的证书信任配置：优先读取非空的 `CODEX_CA_CERTIFICATE`，
 其次读取 `SSL_CERT_FILE`，并保留系统根证书；证书配置错误不会回退为不验证证书。
 出口测试结果仅供诊断，不限制代理的选择和绑定；未测试或测试失败的代理仍可使用。

@@ -2044,6 +2044,8 @@ async fn authorization_import_rejects_a_saved_proxy_changed_during_oauth() {
     let saved = proxies
         .create(
             NewProxy {
+                auto_location: false,
+                test: None,
                 location: None,
                 name: "OAuth".to_owned(),
                 proxy: original.clone(),
@@ -2054,6 +2056,7 @@ async fn authorization_import_rejects_a_saved_proxy_changed_during_oauth() {
         .unwrap()
         .record;
     let success = ProxyTestResult {
+        location: Default::default(),
         success: true,
         latency_ms: 1,
         exit_ip: Some("203.0.113.5".parse().unwrap()),
@@ -2069,6 +2072,8 @@ async fn authorization_import_rejects_a_saved_proxy_changed_during_oauth() {
     let edited = proxies
         .update(
             UpdateProxy {
+                auto_location: None,
+                test: None,
                 location: None,
                 id: saved.id.clone(),
                 revision: saved.revision,
