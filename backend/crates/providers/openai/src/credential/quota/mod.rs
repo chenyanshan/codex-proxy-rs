@@ -39,6 +39,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::transport::profile::CodexWireProfileState;
+use crate::transport::protocol::responses::CodexResponsesRequest;
 use crate::transport::{
     CodexBackendClient, CodexClientError, CodexRateLimitResetCredits,
     CodexRateLimitResetCreditsConsumeResult, CodexRequestContext,
@@ -104,6 +105,14 @@ impl CodexQuotaSyncSummary {
     pub const fn has_operational_failures(self) -> bool {
         self.transient > 0
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CodexWarmupSummary {
+    pub warmed_up: u64,
+    pub skipped_active: u64,
+    pub skipped_exhausted: u64,
+    pub failed: u64,
 }
 
 #[derive(Debug, Error)]
@@ -895,6 +904,160 @@ impl CodexCredentialQuotaService {
                 }
             }
         }
+        Ok(summary)
+    }
+
+    #[must_use]
+    pub fn runtime_policy(&self) -> &Arc<dyn ProviderRuntimePolicyPort> {
+        &self.runtime_policy
+    }
+
+    /// 批量预激活 OAuth 账号的 5h 配额滑动窗口。
+    pub async fn execute_warmup(
+        &self,
+        model: Option<&str>,
+    ) -> Result<CodexWarmupSummary, CodexCredentialQuotaError> {
+        let mut accounts = self.repository.list_for_provider().await?;
+        accounts.retain(|account| {
+            account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+                && account.enabled()
+                && !matches!(
+                    account.credential_state(),
+                    CredentialState::Banned | CredentialState::Invalid
+                )
+        });
+        let mut summary = CodexWarmupSummary::default();
+        if accounts.is_empty() {
+            return Ok(summary);
+        }
+        let account_ids = accounts
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<Vec<_>>();
+        let observed = self.store.get_quotas(&account_ids).await?;
+        let observed_snapshots = observed
+            .iter()
+            .filter_map(|obs| {
+                quota_snapshot_from_observation(obs)
+                    .map(|snapshot| (obs.account_id.clone(), snapshot))
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let client = CodexBackendClient::new(
+            self.http.clone(),
+            self.base_url.clone(),
+            self.profile.clone(),
+        );
+
+        let now_utc = chrono::Utc::now();
+        for account in accounts {
+            if let Some(snapshot) = observed_snapshots.get(account.id()) {
+                // 1. 周线已触顶或耗尽跳过
+                let weekly_exhausted = snapshot
+                    .windows()
+                    .iter()
+                    .any(|w| w.kind() == CodexQuotaWindowKind::Weekly && w.limit_reached());
+                if weekly_exhausted {
+                    summary.skipped_exhausted += 1;
+                    continue;
+                }
+                // 2. 5h 窗口当前活跃且距重置时间 > 30 分钟跳过
+                let has_active_5h = snapshot.windows().iter().any(|w| {
+                    w.kind() == CodexQuotaWindowKind::ShortTerm
+                        && w.reset_at().is_some_and(|reset_at| {
+                            reset_at > now_utc + chrono::Duration::minutes(30)
+                        })
+                });
+                if has_active_5h {
+                    summary.skipped_active += 1;
+                    continue;
+                }
+            }
+
+            let credential = match self.repository.load_runtime_credential(&account).await {
+                Ok(cred) => cred,
+                Err(_) => {
+                    summary.failed += 1;
+                    continue;
+                }
+            };
+            let authorization = match credential.authentication.authorization_header() {
+                Ok(auth) => auth,
+                Err(_) => {
+                    summary.failed += 1;
+                    continue;
+                }
+            };
+
+            let warmup_model = model.unwrap_or("gpt-5.4-mini");
+            let mut body = Map::new();
+            body.insert("model".to_owned(), Value::String(warmup_model.to_owned()));
+            body.insert(
+                "input".to_owned(),
+                serde_json::json!([{
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}]
+                }]),
+            );
+            body.insert("stream".to_owned(), Value::Bool(true));
+            body.insert("store".to_owned(), Value::Bool(false));
+            body.insert(
+                "service_tier".to_owned(),
+                Value::String("default".to_owned()),
+            );
+            body.insert(
+                "reasoning".to_owned(),
+                serde_json::json!({"effort": "none"}),
+            );
+            body.insert("text".to_owned(), serde_json::json!({"verbosity": "low"}));
+
+            let upstream_request = CodexResponsesRequest::from_body(body);
+            let request_id = format!("warmup_{}", Uuid::now_v7().simple());
+            let client_for_account = match client.for_account(&account) {
+                Ok(c) => c,
+                Err(error) => {
+                    tracing::warn!(account_id = %account.id(), error = %error, "warmup client for account failed");
+                    summary.failed += 1;
+                    continue;
+                }
+            };
+            let context = crate::transport::CodexRequestContext::auxiliary(
+                authorization.expose_secret(),
+                account.upstream_account_id(),
+                &request_id,
+                None,
+            );
+
+            match client_for_account
+                .create_response_stream_http_sse(&upstream_request, context)
+                .await
+            {
+                Ok(response) => {
+                    if !response.rate_limit_headers.is_empty() {
+                        let _ = self
+                            .synchronize_passive_headers(&account, &response.rate_limit_headers)
+                            .await;
+                    }
+                    summary.warmed_up += 1;
+                    tracing::info!(
+                        account_id = %account.id(),
+                        model = warmup_model,
+                        "OpenAI account warmed up successfully"
+                    );
+                }
+                Err(error) => {
+                    summary.failed += 1;
+                    tracing::warn!(
+                        account_id = %account.id(),
+                        error = %error,
+                        "OpenAI account warmup request rejected by upstream"
+                    );
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+
         Ok(summary)
     }
 

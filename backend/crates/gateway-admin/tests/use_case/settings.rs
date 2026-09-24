@@ -238,6 +238,9 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 account_auto_freeze_probe_enabled: true,
                 account_auto_freeze_probe_model: None,
                 account_auto_freeze_adaptive_concurrency: true,
+                account_warmup_enabled: false,
+                account_warmup_schedule_time: "08:00".to_owned(),
+                account_warmup_model: None,
             },
         )
         .await

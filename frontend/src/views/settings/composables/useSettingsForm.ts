@@ -49,6 +49,9 @@ export function useSettingsForm() {
     accountAutoFreezeProbeEnabled: true,
     accountAutoFreezeProbeModel: '',
     accountAutoFreezeAdaptiveConcurrency: true,
+    accountWarmupEnabled: false,
+    accountWarmupScheduleTime: '08:00',
+    accountWarmupModel: '',
   })
 
   function snapshot() {
@@ -137,6 +140,9 @@ export function useSettingsForm() {
     form.accountAutoFreezeProbeEnabled = data.accountAutoFreezeProbeEnabled
     form.accountAutoFreezeProbeModel = data.accountAutoFreezeProbeModel ?? ''
     form.accountAutoFreezeAdaptiveConcurrency = data.accountAutoFreezeAdaptiveConcurrency
+    form.accountWarmupEnabled = data.accountWarmupEnabled
+    form.accountWarmupScheduleTime = data.accountWarmupScheduleTime ?? '08:00'
+    form.accountWarmupModel = data.accountWarmupModel ?? ''
     mappings.value = Object.entries(data.modelMappings || {}).map(([requestedModel, upstreamModel]) => ({
       requestedModel,
       upstreamModel: String(upstreamModel),
@@ -241,6 +247,17 @@ export function useSettingsForm() {
       toast.warning('探测模型名称不能超过 128 个字符')
       return
     }
+    const scheduleTime = form.accountWarmupScheduleTime.trim()
+    const timeRegex = /^(?:[01]\d|2[0-3]):[0-5]\d(?:,(?:[01]\d|2[0-3]):[0-5]\d)*$/
+    if (!scheduleTime || !timeRegex.test(scheduleTime)) {
+      toast.warning('预激活时间格式无效，请输入 HH:MM 格式（如 08:00 或 08:00,13:00）')
+      return
+    }
+    const warmupModel = form.accountWarmupModel.trim()
+    if (warmupModel && (warmupModel.length > 128 || warmupModel !== warmupModel.trim())) {
+      toast.warning('预激活模型名称不能超过 128 个字符')
+      return
+    }
     await saveAction.run(async () => {
       const result = await updateSettings({
         providerRequestProfiles: requestProfileUpdates(
@@ -271,6 +288,9 @@ export function useSettingsForm() {
         accountAutoFreezeProbeEnabled: form.accountAutoFreezeProbeEnabled,
         accountAutoFreezeProbeModel: probeModel || null,
         accountAutoFreezeAdaptiveConcurrency: form.accountAutoFreezeAdaptiveConcurrency,
+        accountWarmupEnabled: form.accountWarmupEnabled,
+        accountWarmupScheduleTime: scheduleTime,
+        accountWarmupModel: warmupModel || null,
       })
       applySettings(result)
       toast.success('设置已保存')

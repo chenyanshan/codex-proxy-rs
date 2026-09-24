@@ -114,6 +114,9 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 account_auto_freeze_probe_model: command.account_auto_freeze_probe_model,
                 account_auto_freeze_adaptive_concurrency: command
                     .account_auto_freeze_adaptive_concurrency,
+                account_warmup_enabled: command.account_warmup_enabled,
+                account_warmup_schedule_time: command.account_warmup_schedule_time,
+                account_warmup_model: command.account_warmup_model,
             },
             audit: mutation_audit(
                 context,
@@ -257,6 +260,9 @@ pub(crate) fn admin_runtime_settings(
         account_auto_freeze_probe_enabled: settings.account_auto_freeze_probe_enabled,
         account_auto_freeze_probe_model: settings.account_auto_freeze_probe_model,
         account_auto_freeze_adaptive_concurrency: settings.account_auto_freeze_adaptive_concurrency,
+        account_warmup_enabled: settings.account_warmup_enabled,
+        account_warmup_schedule_time: settings.account_warmup_schedule_time,
+        account_warmup_model: settings.account_warmup_model,
         updated_at: settings.updated_at,
     })
 }
