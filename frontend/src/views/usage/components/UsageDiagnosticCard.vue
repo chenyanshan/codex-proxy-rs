@@ -128,17 +128,17 @@ function diagnosticNameDisplay(name: string) {
     :description="resultDimension === 'keyModel' ? '各密钥下每个模型的 Token 与估算费用' : `按${selectedDimensionLabel}定位高影响请求`"
     class="h-105 min-h-105 max-h-105 min-w-0 w-full lg:h-full lg:min-h-90 lg:max-h-105"
   >
-    <template #actions>
-      <BaseSegmented
-        v-model="dimension"
-        label="诊断维度"
-        :options="dimensionOptions"
-        :disabled="loading"
-        class="w-full min-w-0 lg:w-96"
-      />
-    </template>
-
     <template #body>
+      <div class="mb-3 max-w-full shrink-0 overflow-x-auto">
+        <BaseSegmented
+          v-model="dimension"
+          label="诊断维度"
+          :options="dimensionOptions"
+          :disabled="loading"
+          size="sm"
+          class="ml-auto w-[35rem]"
+        />
+      </div>
       <BaseTable
         v-if="hasData"
         :key="resultDimension"
