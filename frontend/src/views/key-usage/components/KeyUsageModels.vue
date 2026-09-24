@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import type { KeyUsageModel } from '@/api/modules/key-usage'
-import { BaseCard, BaseTable, defineTableColumns } from '@codex-proxy/ui'
+import { BaseButton, BaseCard, BaseTable, defineTableColumns } from '@codex-proxy/ui'
 import { formatInteger } from '@/utils/number'
 import { money } from '../utils/format'
 
-defineProps<{ models: KeyUsageModel[] }>()
+defineProps<{
+  models: KeyUsageModel[]
+  pagination: { currentPage: number, pageSize: number, hasMore: boolean }
+  loading: boolean
+}>()
+defineEmits<{ pageChange: [page: number] }>()
 
 const columns = defineTableColumns<KeyUsageModel>([
   { key: 'model', label: '模型', kind: 'custom', size: 'xl' },
@@ -16,8 +21,8 @@ const columns = defineTableColumns<KeyUsageModel>([
 
 <template>
   <BaseCard title="按模型用量" description="当前密钥在所选范围内的请求、Token 与估算费用">
-    <div class="h-70 min-h-0 overflow-hidden">
-      <BaseTable :columns="columns" :rows="models" row-key="model" class="min-w-0" empty-text="所选条件下暂无模型用量">
+    <div class="h-70 min-h-0 flex flex-col gap-2 overflow-hidden">
+      <BaseTable :columns="columns" :rows="models" row-key="model" class="min-h-0 min-w-0 flex-1" empty-text="所选条件下暂无模型用量">
         <template #model="{ row }">
           <code class="block max-w-full truncate font-mono text-cp-sm font-heavy text-cp-text">{{ row.model }}</code>
         </template>
@@ -34,6 +39,15 @@ const columns = defineTableColumns<KeyUsageModel>([
           </span>
         </template>
       </BaseTable>
+      <div v-if="pagination.currentPage > 1 || pagination.hasMore" class="flex shrink-0 items-center justify-end gap-2 text-cp-sm text-cp-text-secondary">
+        <span>第 {{ pagination.currentPage }} 页</span>
+        <BaseButton variant="soft" size="sm" :disabled="loading || pagination.currentPage <= 1" @click="$emit('pageChange', pagination.currentPage - 1)">
+          上一页
+        </BaseButton>
+        <BaseButton variant="soft" size="sm" :disabled="loading || !pagination.hasMore" @click="$emit('pageChange', pagination.currentPage + 1)">
+          下一页
+        </BaseButton>
+      </div>
     </div>
   </BaseCard>
 </template>

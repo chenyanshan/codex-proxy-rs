@@ -777,6 +777,21 @@ pub struct DiagnosticObservation {
     pub costs: Vec<CurrencyCost>,
 }
 
+/// 诊断分组的有界分页请求；未分页的原有诊断维度仍使用固定热点上限。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticPageQuery {
+    pub current_page: u32,
+    pub page_size: PageSize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticObservationPage {
+    pub items: Vec<DiagnosticObservation>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub has_more: bool,
+}
+
 /// 统一运维错误记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpsError {
@@ -1167,4 +1182,7 @@ pub struct DiagnosticsItem {
 pub struct DiagnosticsResult {
     pub dimension: DiagnosticDimension,
     pub items: Vec<DiagnosticsItem>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub has_more: bool,
 }

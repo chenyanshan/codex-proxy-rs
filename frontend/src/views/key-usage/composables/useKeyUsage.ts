@@ -14,6 +14,7 @@ export function useKeyUsage() {
   const kind = shallowRef<KeyUsageRecordKind>('success')
   const refreshInterval = shallowRef('30')
   const overview = shallowRef<KeyUsageOverview>()
+  const modelsPage = shallowRef(1)
   const refreshing = shallowRef(false)
   const recordsStale = shallowRef(false)
   const overviewRequest = useRequestState()
@@ -39,11 +40,15 @@ export function useKeyUsage() {
   async function loadOverview() {
     const id = overviewRequest.start()
     try {
-      const result = await getKeyUsageOverview(query.value, { signal: overviewRequest.signal, silent: true })
-      if (overviewRequest.isCurrent(id))
+      const result = await getKeyUsageOverview({ ...query.value, currentPage: modelsPage.value, pageSize: 20 }, { signal: overviewRequest.signal, silent: true })
+      if (overviewRequest.isCurrent(id)) {
         overview.value = result
+        modelsPage.value = result.modelsPagination.currentPage
+      }
     }
     catch (cause) {
+      if (overviewRequest.isCurrent(id))
+        modelsPage.value = overview.value?.modelsPagination.currentPage ?? 1
       overviewRequest.fail(id, cause)
     }
     finally {
@@ -71,6 +76,7 @@ export function useKeyUsage() {
   watch([period, selectedModel], () => {
     queryGeneration += 1
     rangeEnd.value = dayjs()
+    modelsPage.value = 1
     overview.value = undefined
     records.items.value = []
     void loadOverview()
@@ -103,6 +109,13 @@ export function useKeyUsage() {
     void records.reloadFromStart()
   }
 
+  function changeModelsPage(page: number) {
+    if (!overview.value || page < 1 || (page > modelsPage.value && !overview.value.modelsPagination.hasMore))
+      return
+    modelsPage.value = page
+    void loadOverview()
+  }
+
   return {
     period,
     model,
@@ -117,5 +130,6 @@ export function useKeyUsage() {
     refresh,
     changePageSize,
     changePage,
+    changeModelsPage,
   }
 }

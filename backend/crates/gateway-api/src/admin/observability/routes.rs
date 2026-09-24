@@ -196,6 +196,7 @@ where
     S: SessionState + Send + Sync,
 {
     let dimension = query.dimension().map_err(map_wire_error)?;
+    let page = query.page(dimension).map_err(map_wire_error)?;
     let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
         .map_err(map_wire_error)?;
     let filter = domain::UsageFilter {
@@ -208,7 +209,7 @@ where
     let result = state
         .admin_services()
         .observability()
-        .diagnostics(range, filter, domain_diagnostic_dimension(dimension))
+        .diagnostics(range, filter, domain_diagnostic_dimension(dimension), page)
         .await
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(

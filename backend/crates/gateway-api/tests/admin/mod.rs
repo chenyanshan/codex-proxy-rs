@@ -36,8 +36,9 @@ use gateway_admin::{
         },
         observability::{
             DashboardObservation, DecimalAmount, DiagnosticDimension, DiagnosticObservation,
-            OpsError, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail,
-            UsageFilter, UsageListRecord, UsageOverview, UsagePage, UsageQuery,
+            DiagnosticObservationPage, DiagnosticPageQuery, OpsError, OpsErrorPage, OpsErrorQuery,
+            RequestMetricPoint, TimeRange, UsageDetail, UsageFilter, UsageListRecord,
+            UsageOverview, UsagePage, UsageQuery,
         },
         provider_credentials::{
             AuthorizationCommit, AuthorizationStarted, CompleteAuthorization, CredentialDetails,
@@ -609,7 +610,12 @@ pub(super) struct MemoryObservations {
     pub trend: Option<Vec<RequestMetricPoint>>,
     pub summaries: Vec<(TimeRange, UsageFilter)>,
     pub trends: Vec<(TimeRange, UsageFilter)>,
-    pub diagnostic_queries: Vec<(TimeRange, UsageFilter, DiagnosticDimension)>,
+    pub diagnostic_queries: Vec<(
+        TimeRange,
+        UsageFilter,
+        DiagnosticDimension,
+        Option<DiagnosticPageQuery>,
+    )>,
     pub records: Vec<UsageQuery>,
     pub errors: Vec<OpsErrorQuery>,
 }
@@ -1287,13 +1293,19 @@ impl ObservabilityStore for UnusedStore {
         range: TimeRange,
         filter: UsageFilter,
         dimension: DiagnosticDimension,
-    ) -> AdminStoreResult<Vec<DiagnosticObservation>> {
+        page: Option<DiagnosticPageQuery>,
+    ) -> AdminStoreResult<DiagnosticObservationPage> {
         self.observations
             .lock()
             .expect("observations")
             .diagnostic_queries
-            .push((range, filter, dimension));
-        Ok(self.diagnostics.lock().expect("diagnostics").clone())
+            .push((range, filter, dimension, page));
+        Ok(DiagnosticObservationPage {
+            items: self.diagnostics.lock().expect("diagnostics").clone(),
+            current_page: page.map_or(1, |page| page.current_page),
+            page_size: page.map_or(100, |page| page.page_size.get()),
+            has_more: false,
+        })
     }
 
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage> {

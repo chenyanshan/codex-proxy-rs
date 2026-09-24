@@ -40,10 +40,12 @@ const {
   insights,
   refreshingList,
   diagnosticDimension,
+  diagnosticLoading,
   loadUsageRecords,
   refreshUsageRecords,
   handlePageChange,
   handlePageSizeChange,
+  handleDiagnosticPageChange,
 } = useUsageRecordsTable({
   timeRangeParams,
   latestTimeRangeParams,
@@ -82,6 +84,8 @@ watch(timeRange, () => {
       :overview="insights.overview"
       :diagnostics="insights.diagnostics"
       :loading="analyticsLoading"
+      :diagnostics-loading="diagnosticLoading"
+      @diagnostic-page-change="handleDiagnosticPageChange"
     />
 
     <BaseCard

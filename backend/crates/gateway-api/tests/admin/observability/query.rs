@@ -71,6 +71,42 @@ fn diagnostics_query_should_keep_wire_dimension_name() {
 }
 
 #[test]
+fn diagnostics_query_pages_only_key_model_dimension() {
+    let query: DiagnosticsQuery = serde_json::from_value(json!({
+        "dimension": "keyModel", "currentPage": 3, "pageSize": 10
+    }))
+    .unwrap();
+    let page = query.page(query.dimension().unwrap()).unwrap().unwrap();
+    assert_eq!((page.current_page, page.page_size.get()), (3, 10));
+    let invalid: DiagnosticsQuery = serde_json::from_value(json!({
+        "dimension": "keyModel", "currentPage": 0
+    }))
+    .unwrap();
+    assert_eq!(
+        invalid
+            .page(DiagnosticDimension::KeyModel)
+            .unwrap_err()
+            .field(),
+        "currentPage"
+    );
+    let invalid: DiagnosticsQuery = serde_json::from_value(json!({
+        "dimension": "keyModel", "pageSize": 101
+    }))
+    .unwrap();
+    assert_eq!(
+        invalid
+            .page(DiagnosticDimension::KeyModel)
+            .unwrap_err()
+            .field(),
+        "pageSize"
+    );
+    assert_eq!(
+        query.page(DiagnosticDimension::Model).unwrap_err().field(),
+        "dimension"
+    );
+}
+
+#[test]
 fn scalar_query_parsers_should_reject_out_of_range_values_without_echoing_input() {
     assert_eq!(parse_status(Some(99)).unwrap_err().field(), "statusCode");
     assert_eq!(

@@ -12,7 +12,7 @@ use crate::{
         auth::SessionSubject,
         client_keys::ClientKeySecret,
         key_usage::{
-            KeyUsageOverview, KeyUsageQuery, KeyUsageRecordKind, KeyUsageRecords,
+            KeyUsageOverview, KeyUsageOverviewQuery, KeyUsageRecordKind, KeyUsageRecords,
             KeyUsageRecordsQuery,
         },
         observability::{
@@ -52,7 +52,7 @@ pub trait KeyUsageService: Send + Sync {
     async fn overview(
         &self,
         session_id: Option<&str>,
-        query: KeyUsageQuery,
+        query: KeyUsageOverviewQuery,
     ) -> Result<Option<KeyUsageOverview>, AdminError>;
 
     async fn records(
@@ -167,7 +167,7 @@ impl KeyUsageService for DefaultKeyUsageService {
     async fn overview(
         &self,
         session_id: Option<&str>,
-        query: KeyUsageQuery,
+        query: KeyUsageOverviewQuery,
     ) -> Result<Option<KeyUsageOverview>, AdminError> {
         let Some(id) = self.key_id(session_id).await? else {
             return Ok(None);
@@ -181,7 +181,7 @@ impl KeyUsageService for DefaultKeyUsageService {
         else {
             return Ok(None);
         };
-        let filter = usage_filter(&id, query.model);
+        let filter = usage_filter(&id, query.usage.model);
         let now = Utc::now();
         // 健康条始终展示北京时间今日，不随历史范围或模型筛选改变。
         let today = TimeRange {
@@ -189,10 +189,16 @@ impl KeyUsageService for DefaultKeyUsageService {
             end: now,
         };
         let (overview, trend, models, health_points) = futures::try_join!(
-            self.observations.usage_summary(query.range, filter.clone()),
-            self.observations.usage_trend(query.range, filter.clone()),
             self.observations
-                .usage_diagnostics(query.range, filter, DiagnosticDimension::Model),
+                .usage_summary(query.usage.range, filter.clone()),
+            self.observations
+                .usage_trend(query.usage.range, filter.clone()),
+            self.observations.usage_diagnostics(
+                query.usage.range,
+                filter,
+                DiagnosticDimension::Model,
+                Some(query.models_page),
+            ),
             self.observations
                 .usage_trend(today, usage_filter(&id, None)),
         )

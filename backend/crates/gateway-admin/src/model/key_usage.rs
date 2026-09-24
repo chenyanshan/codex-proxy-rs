@@ -4,8 +4,8 @@ use super::{
     PageSize,
     client_keys::ClientKeyRecord,
     observability::{
-        DiagnosticObservation, HealthTimeline, OpsErrorPage, RequestMetricPoint, TimeRange,
-        UsageOverview, UsagePage,
+        DiagnosticObservationPage, DiagnosticPageQuery, HealthTimeline, OpsErrorPage,
+        RequestMetricPoint, TimeRange, UsageOverview, UsagePage,
     },
 };
 
@@ -13,6 +13,12 @@ use super::{
 pub struct KeyUsageQuery {
     pub range: TimeRange,
     pub model: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KeyUsageOverviewQuery {
+    pub usage: KeyUsageQuery,
+    pub models_page: DiagnosticPageQuery,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -33,7 +39,7 @@ pub struct KeyUsageOverview {
     pub key: ClientKeyRecord,
     pub overview: UsageOverview,
     pub trend: Vec<RequestMetricPoint>,
-    pub models: Vec<DiagnosticObservation>,
+    pub models: DiagnosticObservationPage,
     pub health_timeline: HealthTimeline,
 }
 

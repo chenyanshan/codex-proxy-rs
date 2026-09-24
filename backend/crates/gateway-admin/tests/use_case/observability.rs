@@ -16,8 +16,9 @@ use gateway_admin::{
         MutationContext, PageSize, Revision,
         observability::{
             AccountPoolMetrics, AttemptMetrics, CostCoverage, CurrencyCost, DashboardObservation,
-            DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation, Granularity,
-            HealthStatus, LatencyPercentiles, OpsErrorPage, OpsErrorQuery, PercentileMilliseconds,
+            DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
+            DiagnosticObservationPage, DiagnosticPageQuery, Granularity, HealthStatus,
+            LatencyPercentiles, OpsErrorPage, OpsErrorQuery, PercentileMilliseconds,
             RequestMetricPoint, RequestMetrics, TimeRange, TrendKind, UsageBilling,
             UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageListRecord, UsageOverview,
             UsagePage, UsageQuery, china_day_start,
@@ -431,7 +432,12 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
         .expect("usage insights");
     let diagnostics = services
         .observability()
-        .diagnostics(range, UsageFilter::default(), DiagnosticDimension::Provider)
+        .diagnostics(
+            range,
+            UsageFilter::default(),
+            DiagnosticDimension::Provider,
+            None,
+        )
         .await
         .expect("usage diagnostics");
 
@@ -778,8 +784,14 @@ impl ObservabilityStore for FixtureObservabilityStore {
         _: TimeRange,
         _: UsageFilter,
         _: DiagnosticDimension,
-    ) -> AdminStoreResult<Vec<DiagnosticObservation>> {
-        Ok(self.diagnostics.lock().expect("diagnostics").clone())
+        _: Option<DiagnosticPageQuery>,
+    ) -> AdminStoreResult<DiagnosticObservationPage> {
+        Ok(DiagnosticObservationPage {
+            items: self.diagnostics.lock().expect("diagnostics").clone(),
+            current_page: 1,
+            page_size: 100,
+            has_more: false,
+        })
     }
 
     async fn list_ops_errors(&self, _: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage> {

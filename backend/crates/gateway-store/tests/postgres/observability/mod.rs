@@ -811,11 +811,12 @@ async fn recovered_continuation_failure_should_be_visible_in_ops_but_hidden_from
             range,
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
         .expect("diagnostics without recovered intermediates");
-    assert_eq!(diagnostics[0].request_count, 2);
-    assert_eq!(diagnostics[0].failure_count, 0);
+    assert_eq!(diagnostics.items[0].request_count, 2);
+    assert_eq!(diagnostics.items[0].failure_count, 0);
 
     let errors = repository
         .list_ops_errors(OpsErrorQuery {
@@ -1404,13 +1405,17 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
             range,
             admin_observability::UsageFilter::default(),
             admin_observability::DiagnosticDimension::Account,
+            None,
         )
         .await
         .expect("admin diagnostics");
-    assert_eq!(diagnostics[0].key, "acct_observe");
-    assert_eq!(diagnostics[0].name, "account@example.invalid");
-    assert_eq!(diagnostics[0].cost_coverage.provider_reported_count, 1);
-    assert_eq!(diagnostics[0].costs[0].amount.as_str(), "1.25");
+    assert_eq!(diagnostics.items[0].key, "acct_observe");
+    assert_eq!(diagnostics.items[0].name, "account@example.invalid");
+    assert_eq!(
+        diagnostics.items[0].cost_coverage.provider_reported_count,
+        1
+    );
+    assert_eq!(diagnostics.items[0].costs[0].amount.as_str(), "1.25");
 
     let errors = store
         .list_ops_errors(admin_observability::OpsErrorQuery {
@@ -1821,16 +1826,17 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
             range,
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
         .expect("usage diagnostics");
-    assert_eq!(diagnostics[0].key, "acct_observe");
-    assert_eq!(diagnostics[0].name, "account@example.invalid");
-    assert_eq!(diagnostics[0].request_count, 3);
-    assert_eq!(diagnostics[0].success_count, 2);
-    assert_eq!(diagnostics[0].failure_count, 1);
-    assert_eq!(diagnostics[0].retry_count, 1);
-    assert_eq!(diagnostics[0].costs[0].amount.as_str(), "1.25");
+    assert_eq!(diagnostics.items[0].key, "acct_observe");
+    assert_eq!(diagnostics.items[0].name, "account@example.invalid");
+    assert_eq!(diagnostics.items[0].request_count, 3);
+    assert_eq!(diagnostics.items[0].success_count, 2);
+    assert_eq!(diagnostics.items[0].failure_count, 1);
+    assert_eq!(diagnostics.items[0].retry_count, 1);
+    assert_eq!(diagnostics.items[0].costs[0].amount.as_str(), "1.25");
 
     let errors = repository
         .list_ops_errors(OpsErrorQuery {
