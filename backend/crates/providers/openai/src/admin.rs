@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt as _;
 use gateway_admin::model::Revision;
@@ -20,12 +21,12 @@ use gateway_admin::model::provider_credentials::{
     PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedAuthorizationCredential,
     PreparedCredentialCreate, PreparedCredentialImport, PreparedCredentialRotation,
     PreparedCredentialRotationFacts, ProviderDocument, ProviderExport,
-    ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderProfileActivityInsights,
-    ProviderProfileAvatar, ProviderProfileAvatarStreamError, ProviderProfileDailyUsage,
-    ProviderProfileInvocation, ProviderProfileStatistics, ProviderProfileStatisticsSummary,
-    ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow, ProviderQuotaWindowRole,
-    ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits, ProviderSubscription,
-    QuotaLocalUsageAttribution,
+    ProviderExportCredentialInput, ProviderModel, ProviderModelCatalogDocument, ProviderModels,
+    ProviderProfileActivityInsights, ProviderProfileAvatar, ProviderProfileAvatarStreamError,
+    ProviderProfileDailyUsage, ProviderProfileInvocation, ProviderProfileStatistics,
+    ProviderProfileStatisticsSummary, ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow,
+    ProviderQuotaWindowRole, ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits,
+    ProviderSubscription, QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::quota_forecast_sampling::QuotaForecastObservation;
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -36,7 +37,7 @@ use gateway_core::account::{
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::metering::Money;
-use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload, RawJsonPayload};
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
     OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome, ProviderStoreError,
@@ -848,6 +849,40 @@ impl ProviderAdmin for OpenAiAdminProvider {
         Ok(ProviderModels {
             models,
             observed_at: Some(catalog.observed_at()),
+        })
+    }
+
+    async fn model_catalog_document(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderModelCatalogDocument, ProviderAdminError> {
+        let account = self.account(account_id).await?;
+        let (models, observed_at) = self
+            .catalog
+            .account_catalog_documents(&account)
+            .await
+            .map_err(map_catalog_error)?;
+        // 只有 Codex 原生对象带齐推理强度、上下文窗口等元数据；API 目录只有模型 ID，
+        // 拼出来的文件不满足 Codex `model_catalog_json` 的加载要求，这里直接拒绝而不降格。
+        let mut entries = Vec::with_capacity(models.len());
+        for model in &models {
+            if model.document().protocol() != "codex" {
+                return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported)
+                    .with_public_message("该账号没有可导出的 Codex 原生模型目录"));
+            }
+            let entry: serde_json::Value = serde_json::from_slice(model.document().body())
+                .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
+            entries.push(entry);
+        }
+        let model_count = entries.len();
+        let body = serde_json::to_vec(&serde_json::json!({ "models": entries }))
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
+        let document = RawJsonPayload::new("codex", Bytes::from(body))
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
+        Ok(ProviderModelCatalogDocument {
+            document,
+            model_count,
+            observed_at: DateTime::<Utc>::from(observed_at),
         })
     }
 

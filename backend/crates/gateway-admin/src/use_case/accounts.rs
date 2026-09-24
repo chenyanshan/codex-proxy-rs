@@ -27,9 +27,9 @@ use crate::{
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountPersonalInfo,
             AccountRefreshResult, AccountUsagePeriod, ConsumeProviderResetCredit,
-            PrepareCredentialRefresh, ProviderModels, ProviderProfileAvatar, ProviderQuota,
-            ProviderQuotaRequest, ProviderQuotaWindow, ProviderResetCreditResult,
-            ProviderResetCredits, QuotaLocalUsageAttribution,
+            PrepareCredentialRefresh, ProviderModelCatalogDocument, ProviderModels,
+            ProviderProfileAvatar, ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow,
+            ProviderResetCreditResult, ProviderResetCredits, QuotaLocalUsageAttribution,
         },
         quota_forecast::{
             AccountQuotaForecastReport, account_quota_forecasts, quota_forecast_source_window,
@@ -144,6 +144,11 @@ pub trait AccountsService: Send + Sync {
         account_id: &ProviderAccountId,
         refresh: bool,
     ) -> Result<ProviderModels, AdminError>;
+
+    async fn model_catalog_document(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderModelCatalogDocument, AdminError>;
 
     async fn test_connection(
         &self,
@@ -938,6 +943,17 @@ impl AccountsService for DefaultAccountsService {
             .models(account_id, refresh)
             .await
             .map_err(|error| map_provider_error(error, "provider model catalog"))
+    }
+
+    async fn model_catalog_document(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderModelCatalogDocument, AdminError> {
+        let (_, provider) = self.provider_for_account(account_id).await?;
+        provider
+            .model_catalog_document(account_id)
+            .await
+            .map_err(|error| map_provider_error(error, "provider model catalog document"))
     }
 
     async fn test_connection(

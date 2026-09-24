@@ -707,6 +707,37 @@ pub struct AccountModelsData {
     pub models: Vec<AccountModelView>,
 }
 
+/// 账号模型目录文件；`catalog` 直接作为 Codex `model_catalog_json` 的文件正文落盘。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountModelCatalogData {
+    pub model_count: usize,
+    pub observed_at: String,
+    pub catalog: Value,
+}
+
+/// Provider 未给出 Codex 原生目录正文；该结果不能作为客户端目录文件返回。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnsupportedModelCatalogDocument;
+
+impl TryFrom<ProviderModelCatalogDocument> for AccountModelCatalogData {
+    type Error = UnsupportedModelCatalogDocument;
+
+    /// 目录正文由 Provider 按官方 wire 组装；这里只解析一次用于 JSON 响应，不改写字段。
+    fn try_from(result: ProviderModelCatalogDocument) -> Result<Self, Self::Error> {
+        if result.document.protocol() != "codex" {
+            return Err(UnsupportedModelCatalogDocument);
+        }
+        let catalog = serde_json::from_slice(result.document.body())
+            .map_err(|_| UnsupportedModelCatalogDocument)?;
+        Ok(Self {
+            model_count: result.model_count,
+            observed_at: china_rfc3339(&result.observed_at),
+            catalog,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRefreshData {

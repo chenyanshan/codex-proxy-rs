@@ -310,6 +310,13 @@ export interface AccountModelsResponse {
   models: Array<{ id: string, label: string }>
 }
 
+export interface AccountModelCatalogResponse {
+  modelCount: number
+  observedAt: string
+  /** Codex `model_catalog_json` 的文件正文，原样落盘即可被客户端加载。 */
+  catalog: unknown
+}
+
 export interface AccountImportResponse {
   importedCount: number
   accountIds: string[]
@@ -569,6 +576,15 @@ export function consumeAccountResetCredit(data: AccountResetCreditConsumeParam, 
 export function getAccountModels(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountModelsResponse>({
     url: '/api/admin/accounts/models',
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}
+
+export function getAccountModelCatalog(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<AccountModelCatalogResponse>({
+    url: '/api/admin/accounts/models/catalog',
     method: 'GET',
     params: data,
     ...options,

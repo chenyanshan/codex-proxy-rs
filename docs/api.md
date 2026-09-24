@@ -483,10 +483,23 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `POST` | `/api/admin/accounts/reset-credits` | `{ accountId, creditId?, redeemRequestId }` | 使用 UUIDv4 幂等键消费一张 Provider 重置卡 |
 | `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取该 Provider + 套餐的模型 cache，缺失时有限实时拉取 |
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖 cache |
+| `GET` | `/api/admin/accounts/models/catalog` | `accountId` | 导出该账号的 Codex 原生模型目录，供客户端 `model_catalog_json` 加载 |
 | `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
 | `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, input?, accountId?, outboundProxyId?, outboundProxyUrl? }` | 为支持登录的 Provider 创建 flow；`accountId` 表示重新授权 |
 | `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl, settings? }` | 消费 OAuth callback；首次授权可附带账号设置，重新授权保留原设置 |
 | `POST` | `/api/admin/accounts/oauth/poll` | `{ provider, flowId, callbackUrl?, settings? }` | 轮询支持该能力的 Provider 登录，返回待确认或批量完成 |
+
+`/api/admin/accounts/models/catalog` 返回 `{ modelCount, observedAt, catalog }`，其中 `catalog` 就是
+Codex `model_catalog_json` 要求的 `{"models":[...]}` 文件正文，直接落盘即可，不需要再加工。条目取自
+目标账号当次请求的原生目录，保留上游的模型标识、展示名称、推理强度、上下文窗口与服务档位，不做别名改写或
+字段裁剪；因此配置了模型别名时，客户端应使用网关对外的模型标识，导出的原生 slug 只反映上游目录。
+
+目录正文只包含模型元数据，不含 access token、refresh token 或任何账号凭据。只有能提供 Codex 原生目录的
+账号可以导出：xAI 账号未提供该能力，返回 `400`；只返回模型 ID 的 OpenAI API 目录也返回 `400`，并
+说明该账号没有可导出的原生目录，不降格成只含模型 ID 的文件。
+
+客户端使用时把文件保存到本地任意可读路径，在 `config.toml` 写
+`model_catalog_json = "/path/to/cpr-model-catalog-<账号名>-<账号ID>.json"`，重启客户端后才会重新加载目录。
 
 账号列表支持以下稳定值：
 

@@ -1281,13 +1281,19 @@ async fn api_key_catalog_does_not_replace_native_metadata_for_shared_models() {
     };
     assert_eq!(payload, before.models()[0].document());
     let api_only = service
-        .client_model_catalog(&client_scope(&[api_account]), "1.0.0")
+        .client_model_catalog(&client_scope(std::slice::from_ref(&api_account)), "1.0.0")
         .await
         .expect("API client catalog");
     assert!(matches!(
         api_only[0].content,
         ProviderModelContent::Adapted(_)
     ));
+    let (api_documents, _) = service
+        .account_catalog_documents(&api_account)
+        .await
+        .expect("target API account directory");
+    assert_eq!(api_documents.len(), 1);
+    assert_ne!(api_documents[0].document().protocol(), "codex");
 }
 
 #[tokio::test]
@@ -1364,4 +1370,95 @@ async fn slow_api_key_catalogs_share_a_deadline_and_preserve_healthy_catalogs() 
         refresh,
         Err(CodexCredentialCatalogError::Upstream { .. })
     ));
+}
+
+#[tokio::test]
+async fn account_catalog_documents_keep_native_objects_of_the_account_plan() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let plus = seed_account_with_plan(&store, "acct_catalog_plus", "plus").await;
+    let pro = seed_account_with_plan(&store, "acct_catalog_pro", "pro").await;
+    let server = MockServer::start().await;
+    for (account, unique_model, name, context_window) in [
+        ("acct_catalog_plus", "gpt-plus", "Plus", 128_000),
+        ("acct_catalog_pro", "gpt-pro", "Pro", 272_000),
+    ] {
+        Mock::given(method("GET"))
+            .and(path("/codex/models"))
+            .and(header("authorization", format!("Bearer access-{account}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "models": [
+                    {"slug": unique_model, "display_name": name, "context_window": context_window},
+                    {"slug": "gpt-shared", "display_name": name, "context_window": context_window}
+                ]
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+    }
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    let snapshot = service.synchronize().await.expect("shared union snapshot");
+    assert_eq!(snapshot.models().len(), 3);
+    assert_eq!(snapshot.models()[1].display_name(), "Plus");
+
+    let (models, _) = service
+        .account_catalog_documents(&pro)
+        .await
+        .expect("pro catalog");
+    assert_eq!(models.len(), 2);
+    assert_eq!(models[0].request_model().as_str(), "gpt-pro");
+    assert_eq!(models[1].request_model().as_str(), "gpt-shared");
+    // 导出的目录文件靠原生对象携带上下文窗口等元数据，正文必须原样保留。
+    assert_eq!(models[0].document().protocol(), "codex");
+    let document: serde_json::Value =
+        serde_json::from_slice(models[1].document().body()).expect("native document");
+    assert_eq!(document["context_window"], 272_000);
+    assert_eq!(document["display_name"], "Pro");
+
+    // 另一套餐的账号不能拿到别的套餐条目，否则客户端会列出自己用不了的模型。
+    let (plus_models, _) = service
+        .account_catalog_documents(&plus)
+        .await
+        .expect("plus catalog");
+    assert_eq!(plus_models.len(), 2);
+    assert_eq!(plus_models[0].request_model().as_str(), "gpt-plus");
+    let plus_document: serde_json::Value =
+        serde_json::from_slice(plus_models[1].document().body()).expect("plus native document");
+    assert_eq!(plus_document["context_window"], 128_000);
+
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn disabled_account_can_export_native_catalog_without_a_cached_snapshot() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account = seed_account(&store, "acct_disabled_export").await;
+    store
+        .set_enabled(account.id(), false)
+        .await
+        .expect("disable account");
+    let disabled = store
+        .account("acct_disabled_export")
+        .expect("disabled account");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .and(header(
+            "authorization",
+            "Bearer access-acct_disabled_export",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "models": [{"slug": "gpt-5.4", "display_name": "GPT-5.4", "context_window": 272000}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+
+    let (models, _) = service
+        .account_catalog_documents(&disabled)
+        .await
+        .expect("disabled account export");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].document().protocol(), "codex");
+    server.verify().await;
 }

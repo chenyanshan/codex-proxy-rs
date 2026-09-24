@@ -50,6 +50,10 @@ where
         )
         .route("/api/admin/accounts/models", get(account_models::<S>))
         .route(
+            "/api/admin/accounts/models/catalog",
+            get(account_model_catalog::<S>),
+        )
+        .route(
             "/api/admin/accounts/models/refresh",
             post(refresh_account_models::<S>),
         )
@@ -575,6 +579,25 @@ where
         .await
         .map_err(map_service_error)?;
     let data = account_models_data(result);
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+
+async fn account_model_catalog<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<AccountIdQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let account_id = query.into_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .model_catalog_document(&account_id)
+        .await
+        .map_err(map_service_error)?;
+    let data = AccountModelCatalogData::try_from(result).map_err(|_| AdminError::internal())?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 

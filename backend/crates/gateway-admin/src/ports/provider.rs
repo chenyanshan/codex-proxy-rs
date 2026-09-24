@@ -17,9 +17,9 @@ use crate::model::provider_credentials::{
     AuthorizationStarted, CompleteAuthorization, ConsumeProviderResetCredit,
     PrepareCredentialImport, PrepareCredentialRefresh, PrepareCredentialRotation,
     PreparedAuthorizationCommit, PreparedCredentialImport, PreparedCredentialRotation,
-    ProviderExport, ProviderExportCredentialInput, ProviderModels, ProviderProfileAvatar,
-    ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest, ProviderResetCreditResult,
-    ProviderResetCredits, ProviderSubscription, explicit_plan_type,
+    ProviderExport, ProviderExportCredentialInput, ProviderModelCatalogDocument, ProviderModels,
+    ProviderProfileAvatar, ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest,
+    ProviderResetCreditResult, ProviderResetCredits, ProviderSubscription, explicit_plan_type,
 };
 use crate::model::{
     provider_credentials::{ProviderDocument, ProviderQuotaWindow},
@@ -293,6 +293,14 @@ pub trait ProviderAdmin: Send + Sync {
         account_id: &ProviderAccountId,
         refresh: bool,
     ) -> Result<ProviderModels, ProviderAdminError>;
+
+    /// 导出该账号的 Provider 原生模型目录正文；不提供原生目录的 Provider 使用默认拒绝。
+    async fn model_catalog_document(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<ProviderModelCatalogDocument, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
 
     async fn export_credentials(
         &self,

@@ -363,6 +363,21 @@ impl RuntimeSnapshotCompiler {
 
     /// 读取一个 revision，并为已注册 Provider 查询实时模型目录。
     pub async fn compile(&self) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
+        self.compile_inner(None).await
+    }
+
+    /// 配置提交复用同一扩展集合的已发布目录，目录留待对账刷新。
+    pub(crate) async fn compile_with_cached_catalog(
+        &self,
+        previous: &RuntimeSnapshot,
+    ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
+        self.compile_inner(Some(previous)).await
+    }
+
+    async fn compile_inner(
+        &self,
+        previous: Option<&RuntimeSnapshot>,
+    ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
         // 同一配置 revision 的目录稳定性重试必须复用且强持有同一个扩展集合。
         // 否则一次动态目录发布会让临时候选在下一轮前析构，随后重复 prepare
         // 得到新的初始目录代次，稳定性检查永远无法收敛。
@@ -404,8 +419,11 @@ impl RuntimeSnapshotCompiler {
             let catalogs = self.catalogs_for_extensions(extensions.as_ref())?;
             let catalog_generations = catalogs.catalog_generations();
             let provider_kinds = catalog_generations.keys().cloned().collect();
+            let cached = previous.filter(|previous| {
+                previous.extensions().map(|set| set.id()) == extensions.as_ref().map(|set| set.id())
+            });
             let snapshot =
-                compile_runtime_snapshot(facts, catalogs.as_ref(), provider_kinds).await?;
+                compile_runtime_snapshot(facts, catalogs.as_ref(), provider_kinds, cached).await?;
             let observed_generations = catalogs.catalog_generations();
             if catalog_generations == observed_generations {
                 if extensions.is_some()
@@ -419,7 +437,11 @@ impl RuntimeSnapshotCompiler {
                     return Err(RuntimeSnapshotCompileError::RevisionChanged);
                 }
                 return Ok(snapshot
-                    .with_provider_catalog_generations(observed_generations)
+                    .with_provider_catalog_generations(if cached.is_some() {
+                        BTreeMap::new()
+                    } else {
+                        observed_generations
+                    })
                     .with_extensions(extensions));
             }
         }
@@ -431,11 +453,32 @@ async fn compile_runtime_snapshot(
     facts: SnapshotFacts,
     catalogs: &dyn ProviderCatalogPort,
     provider_kinds: Vec<ProviderKind>,
+    previous: Option<&RuntimeSnapshot>,
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
     // 只有成功取得的完整目录能证明模型缺项；发现型目录和查询失败均交由上游验证。
     let mut provider_models = Vec::new();
     let mut exhaustive_provider_catalogs = BTreeSet::new();
     for provider in &provider_kinds {
+        if let Some(previous) = previous {
+            if previous.exhaustive_provider_catalogs.contains(provider) {
+                exhaustive_provider_catalogs.insert(provider.clone());
+            }
+            if let Some(models) = previous.provider_models.get(provider) {
+                provider_models.extend(models.iter().map(|(model, capabilities)| {
+                    let compiled =
+                        ProviderModel::new(provider.clone(), model.clone(), capabilities.clone());
+                    match previous
+                        .provider_model_presentations
+                        .get(provider)
+                        .and_then(|presentations| presentations.get(model))
+                    {
+                        Some(presentation) => compiled.with_presentation(presentation.clone()),
+                        None => compiled,
+                    }
+                }));
+            }
+            continue;
+        }
         let Ok(models) = catalogs.query_model_capabilities(provider).await else {
             continue;
         };
