@@ -503,7 +503,7 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取该 Provider + 套餐的模型 cache，缺失时有限实时拉取 |
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖 cache |
 | `GET` | `/api/admin/accounts/models/catalog` | `accountId` | 导出该账号的 Codex 原生模型目录，供客户端 `model_catalog_json` 加载 |
-| `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
+| `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId`、可选 `attributionProbe` | 通过 SSE 返回实时连接测试事件；`attributionProbe=1..3` 执行服务端固定的模型归因探针，不作为业务 Responses 用量记录 |
 | `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, input?, accountId?, outboundProxyId?, outboundProxyUrl? }` | 为支持登录的 Provider 创建 flow；`accountId` 表示重新授权 |
 | `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl, settings? }` | 消费 OAuth callback；首次授权可附带账号设置，重新授权保留原设置 |
 | `POST` | `/api/admin/accounts/oauth/poll` | `{ provider, flowId, callbackUrl?, settings? }` | 轮询支持该能力的 Provider 登录，返回待确认或批量完成 |
@@ -676,6 +676,11 @@ OAuth 等待回调期间不持有保护；提交仍拒绝已删除或连接配�
 - `sendState` 为 `not_sent`、`sent`、`ambiguous`，非 Provider 错误为 `null`。
 - `error`、`providerErrorCode`、`providerErrorType`、`upstreamStatus`、`upstreamContentType` 和
   `upstreamBody` 是实际捕获的原始诊断字段；缺失时为 `null`，不会由本地猜测或翻译。
+- 成功的 `test_complete` 在 Provider 明确观察到时携带 `upstreamResponseModel`；该值来自上游响应，
+  与请求的 `modelId` 分开记录，不由本地模型映射推断。
+- `attributionProbe=1..3` 只允许选择三条服务端内置数字序列探针。对应 `test_start` 增加
+  `probeIndex` 与 `expectedCount`，前端收集三次完整输出后使用 ModelTrace 指纹库进行闭集相似度评分。
+  该结果不是上游身份认证；未收录模型仍会被分配给最接近候选，且探针会发送真实请求并消耗上游额度。
 
 ### 后台导入任务
 

@@ -21,6 +21,7 @@ pub struct AccountProbeRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountProbeResult {
     pub text: Vec<String>,
+    pub upstream_response_model: Option<String>,
 }
 
 /// 仅供当前管理端连接测试展示的原始上游失败响应。
