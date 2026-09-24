@@ -436,9 +436,7 @@ impl CodexCredentialSelector {
                 .collect::<Vec<_>>();
             let mut eligible = Vec::with_capacity(accounts.len());
             for account in accounts {
-                if request.requires_websocket
-                    && account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_API_KEY
-                {
+                if request.requires_websocket {
                     let runtime = match self.repository.load_runtime_credential(&account).await {
                         Ok(runtime) => runtime,
                         Err(CredentialRepositoryError::RevisionConflict) => {
@@ -451,9 +449,7 @@ impl CodexCredentialSelector {
                         }
                         Err(error) => return Err(error.into()),
                     };
-                    if !matches!(runtime.authentication, CodexRuntimeAuthentication::ApiKey(ref auth)
-                        if auth.configuration.transport == super::ApiKeyTransport::PreferWebsocket)
-                    {
+                    if runtime.transport == super::ResponsesTransport::Http {
                         continue;
                     }
                 }
@@ -800,6 +796,7 @@ impl CodexCredentialSelector {
                         }
                         return Ok(CodexCredentialLease {
                             installation_id: runtime.installation_id,
+                            transport: runtime.transport,
                             account,
                             authentication: runtime.authentication,
                             cookies,
@@ -1444,6 +1441,7 @@ impl fmt::Debug for CodexCredentialSelector {
 }
 
 pub struct CodexCredentialLease {
+    transport: super::ResponsesTransport,
     account: ProviderAccount,
     authentication: CodexRuntimeAuthentication,
     cookies: Vec<RuntimeCodexCookie>,
@@ -1457,6 +1455,10 @@ pub struct CodexCredentialLease {
 }
 
 impl CodexCredentialLease {
+    pub(crate) const fn transport(&self) -> super::ResponsesTransport {
+        self.transport
+    }
+
     #[must_use]
     pub const fn account(&self) -> &ProviderAccount {
         &self.account

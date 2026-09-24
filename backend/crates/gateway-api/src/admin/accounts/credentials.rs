@@ -335,18 +335,20 @@ impl UpdateAccountRequest {
     }
 }
 
-/// 编辑 OpenAI API Key 账号的连接设置；省略密钥时保留已保存的值。
+/// 编辑 OpenAI 账号的连接设置；OAuth 仅接受传输方式。
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountConnectionUpdateRequest {
-    pub base_url: String,
+    pub base_url: Option<String>,
     pub transport: String,
     pub api_key: Option<String>,
 }
 
 impl AccountConnectionUpdateRequest {
     fn validate(&self) -> Result<(), WireValidationError> {
-        require_text(&self.base_url, 2048, "connection.baseUrl")?;
+        if let Some(base_url) = &self.base_url {
+            require_text(base_url, 2048, "connection.baseUrl")?;
+        }
         if !matches!(self.transport.as_str(), "http" | "prefer_websocket") {
             return Err(WireValidationError::new("connection.transport"));
         }
@@ -361,10 +363,11 @@ impl AccountConnectionUpdateRequest {
     }
 
     fn into_document(self) -> ProviderDocument {
-        let mut material = Map::from_iter([
-            ("base_url".to_owned(), Value::String(self.base_url)),
-            ("transport".to_owned(), Value::String(self.transport)),
-        ]);
+        let mut material =
+            Map::from_iter([("transport".to_owned(), Value::String(self.transport))]);
+        if let Some(base_url) = self.base_url {
+            material.insert("base_url".to_owned(), Value::String(base_url));
+        }
         if let Some(key) = self.api_key {
             material.insert("api_key".to_owned(), Value::String(key));
         }

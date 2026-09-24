@@ -3,9 +3,9 @@ import type { AccountRow } from '../constants'
 import type { ApiKeyAccountForm } from '../utils/upstreamApiKey'
 import type { AccountGroup, AccountModelAccess } from '@/api'
 
-import { BaseButton, BaseFormItem, BaseModal, BaseTextarea } from '@codex-proxy/ui'
+import { BaseButton, BaseFormItem, BaseModal, BaseSegmented, BaseTextarea } from '@codex-proxy/ui'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
-import { isOpenAiApiKeyAccount } from '../utils/upstreamApiKey'
+import { isOpenAiApiKeyAccount, isOpenAiOAuthAccount } from '../utils/upstreamApiKey'
 import AccountApiKeyFields from './AccountApiKeyFields.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
@@ -26,6 +26,11 @@ const emit = defineEmits<{
 
 const open = defineModel<boolean>({ required: true })
 const apiKey = defineModel<ApiKeyAccountForm>('apiKey', { required: true })
+const oauthTransport = defineModel<ApiKeyAccountForm['transport']>('oauthTransport', { required: true })
+const transportOptions = [
+  { label: 'WS 优先', value: 'prefer_websocket' },
+  { label: 'HTTP / SSE', value: 'http' },
+]
 const notes = defineModel<string>('notes', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
@@ -61,7 +66,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         </div>
       </div>
 
-      <section v-if="isOpenAiApiKeyAccount(account)" class="grid gap-4">
+      <section v-if="isOpenAiApiKeyAccount(account) || isOpenAiOAuthAccount(account)" class="grid gap-4">
         <h3 class="m-0 text-cp font-heavy text-cp-text">
           上游连接
         </h3>
@@ -71,7 +76,13 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         <p v-else-if="!configurationReady" role="alert" class="m-0 text-cp-sm text-cp-error">
           上游设置读取失败，请关闭后重试
         </p>
-        <AccountApiKeyFields v-else v-model="apiKey" editing :disabled="saving" />
+        <AccountApiKeyFields v-else-if="isOpenAiApiKeyAccount(account)" v-model="apiKey" editing :disabled="saving" />
+        <BaseFormItem v-else label="传输方式">
+          <BaseSegmented v-model="oauthTransport" label="传输方式" :options="transportOptions" :disabled="saving" />
+          <p class="m-0 mt-2 text-cp-xs text-cp-text-secondary">
+            默认 WS 优先，选择 HTTP / SSE 后仅使用 HTTP 上游连接
+          </p>
+        </BaseFormItem>
       </section>
 
       <AccountSettingsFields
@@ -107,7 +118,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
       <BaseButton
         variant="primary"
         :loading="saving"
-        :disabled="!account || groupsLoading || (isOpenAiApiKeyAccount(account) && !configurationReady)"
+        :disabled="!account || groupsLoading || ((isOpenAiApiKeyAccount(account) || isOpenAiOAuthAccount(account)) && !configurationReady)"
         @click="emit('save')"
       >
         保存更改

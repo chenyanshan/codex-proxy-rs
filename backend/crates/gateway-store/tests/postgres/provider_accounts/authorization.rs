@@ -160,6 +160,7 @@ async fn reauthorization_replay_keeps_the_committed_revision_and_later_profile_e
                 email: None,
                 plan_type: None,
                 preserve_profile: true,
+                preserve_credential_state: false,
                 provider_material: ProviderDocument::new(OpaqueProviderData::new(
                     json!({"access_token":"rotated-test-only"})
                         .as_object()

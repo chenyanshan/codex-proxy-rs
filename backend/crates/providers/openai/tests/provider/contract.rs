@@ -209,7 +209,7 @@ async fn native_openai_revalidates_translated_transport_without_reselecting() {
         .seed_api_key(
             "acct_provider_contract",
             upstream.uri(),
-            provider_openai::credential::ApiKeyTransport::Http,
+            provider_openai::credential::ResponsesTransport::Http,
         )
         .await;
     let source = Operation::Generate(GenerateRequest::from_protocol_payload(
@@ -850,9 +850,9 @@ async fn capture_replay_compatibility_request(
                 "acct_provider_contract",
                 base_url.clone(),
                 if websocket {
-                    provider_openai::credential::ApiKeyTransport::PreferWebsocket
+                    provider_openai::credential::ResponsesTransport::PreferWebsocket
                 } else {
-                    provider_openai::credential::ApiKeyTransport::Http
+                    provider_openai::credential::ResponsesTransport::Http
                 },
             )
             .await;
@@ -2310,7 +2310,7 @@ async fn api_websocket_precheck_and_selection_share_the_snapshot_retry_budget() 
         .seed_api_key(
             "acct_provider_contract",
             upstream.uri(),
-            provider_openai::credential::ApiKeyTransport::PreferWebsocket,
+            provider_openai::credential::ResponsesTransport::PreferWebsocket,
         )
         .await;
     store.on_credential_load(Arc::new(|store, id, count| {
@@ -9612,7 +9612,7 @@ async fn api_key_native_endpoints_preserve_bodies_headers_and_own_base_url() {
             .seed_api_key(
                 "acct_provider_contract",
                 format!("{}{prefix}", upstream.uri()),
-                provider_openai::credential::ApiKeyTransport::Http,
+                provider_openai::credential::ResponsesTransport::Http,
             )
             .await;
         let provider = provider_with_base_url(&store, oauth.uri());
@@ -9705,7 +9705,7 @@ async fn api_key_responses_forward_lite_memgen_and_native_compaction_without_cat
         .seed_api_key(
             "acct_provider_contract",
             upstream.uri(),
-            provider_openai::credential::ApiKeyTransport::Http,
+            provider_openai::credential::ResponsesTransport::Http,
         )
         .await;
     Mock::given(method("GET"))
@@ -9819,7 +9819,7 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
             .seed_api_key(
                 "acct_provider_contract",
                 format!("{}{prefix}", upstream.uri()),
-                provider_openai::credential::ApiKeyTransport::Http,
+                provider_openai::credential::ResponsesTransport::Http,
             )
             .await;
         // 后台发现不协商客户端版本；客户端目录独立请求并按实际版本缓存。
@@ -9946,7 +9946,7 @@ async fn disabled_api_key_diagnostic_preserves_authentication_and_transport_cons
         .seed_api_key(
             account_id,
             upstream.uri(),
-            provider_openai::credential::ApiKeyTransport::Http,
+            provider_openai::credential::ResponsesTransport::Http,
         )
         .await;
     let account = store.account(account_id).expect("API account");
@@ -10044,7 +10044,7 @@ async fn api_key_http_account_is_rejected_before_websocket_warmup_or_old_revisio
         .seed_api_key(
             "acct_provider_contract",
             upstream.uri(),
-            provider_openai::credential::ApiKeyTransport::Http,
+            provider_openai::credential::ResponsesTransport::Http,
         )
         .await;
     let provider = provider(&store);
@@ -10092,7 +10092,7 @@ async fn api_key_websocket_uses_api_path_and_bearer_without_oauth_identity() {
         .seed_api_key(
             "acct_provider_contract",
             base,
-            provider_openai::credential::ApiKeyTransport::PreferWebsocket,
+            provider_openai::credential::ResponsesTransport::PreferWebsocket,
         )
         .await;
     let server = tokio::spawn(async move {
@@ -10756,4 +10756,88 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         );
     }
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn oauth_http_transport_overrides_websocket_preference_and_delivers_terminal_event() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    store.set_oauth_transport(
+        "acct_provider_contract",
+        provider_openai::credential::ResponsesTransport::Http,
+    );
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer at-acct_provider_contract"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            json!({"model":"gpt-5.4", "input":"hello", "stream":true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .unwrap()
+        .with_context(Map::from_iter([("use_websocket".to_owned(), json!(true))])),
+    ));
+    let mut stream = provider_with_base_url(&store, upstream.uri())
+        .execute(
+            planned_request("openai", operation),
+            context("req_oauth_http", CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stream.metadata().transport().as_str(), "http_sse");
+    let mut completed = false;
+    while let Some(event) = stream.next().await {
+        completed |= event
+            .unwrap()
+            .canonical_facts()
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Completed(_)));
+    }
+    assert!(completed, "HTTP/SSE must deliver a terminal response");
+    assert_eq!(
+        upstream.received_requests().await.unwrap().len(),
+        1,
+        "no WebSocket attempt or replay"
+    );
+}
+
+#[tokio::test]
+async fn oauth_http_transport_rejects_websocket_only_warmup_without_sending() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    store.set_oauth_transport(
+        "acct_provider_contract",
+        provider_openai::credential::ResponsesTransport::Http,
+    );
+    let upstream = MockServer::start().await;
+    let warmup = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            json!({"model":"gpt-5.4", "input":[], "store":false, "generate":false})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .unwrap(),
+    ));
+    assert!(
+        provider_with_base_url(&store, upstream.uri())
+            .execute(
+                planned_request("openai", warmup),
+                diagnostic_context("req_oauth_warmup", "acct_provider_contract")
+            )
+            .await
+            .is_err()
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
 }

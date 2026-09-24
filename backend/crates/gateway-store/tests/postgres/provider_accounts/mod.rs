@@ -3034,6 +3034,7 @@ pub(super) fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
 fn credential_update(account_id: &str, revision: u64, marker: &str) -> ProviderCredentialUpdate {
     ProviderCredentialUpdate {
         preserve_profile: false,
+        preserve_credential_state: false,
         account_id: account_id.to_owned(),
         expected_revision: Revision::new(revision).expect("credential revision"),
         provider_credentials_json: credential_json(marker),
@@ -3547,5 +3548,62 @@ async fn adaptive_concurrency_handles_unlimited_and_latest_locked_settings_witho
         audited_fields,
         vec![vec!["concurrency_limit".to_owned()]; 2]
     );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn connection_configuration_update_preserves_credential_health() {
+    let Some(database) = TestDatabase::create("connection_configuration_health").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    const ID: &str = "acct_transport_health";
+    repository
+        .insert_provider_account(account(ID, "transport-health-user"))
+        .await
+        .unwrap();
+    sqlx::query("update provider_accounts set credential_state = 'expired', last_error_reason = 'credential_expired', last_error_message = 'test expiration' where id = $1")
+        .bind(ID).execute(&database.pool).await.unwrap();
+    let before: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a where id = $1")
+            .bind(ID)
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let mut credential = credential_update(ID, 1, "same-secret");
+    credential.preserve_credential_state = true;
+    credential.preserve_profile = true;
+    repository
+        .rotate_provider_account(RotateProviderAccount {
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".to_owned(),
+            },
+            profile: profile(ID, "must not replace name"),
+            replacement_identity: None,
+            credential,
+            settings: None,
+            audit: audit("audit_transport_health", "rotate", ID),
+        })
+        .await
+        .unwrap();
+    let after: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a where id = $1")
+            .bind(ID)
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    for field in [
+        "name",
+        "credential_state",
+        "credential_observed_at",
+        "last_error_reason",
+        "last_error_message",
+    ] {
+        assert_eq!(
+            after[field], before[field],
+            "configuration update changed {field}"
+        );
+    }
+    assert_eq!(after["credential_revision"], 2);
     database.close().await;
 }
