@@ -1111,6 +1111,8 @@ HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造�
 列表数据为 `{ items, page, configRevision }`，其中 item 返回 `memberCount`、按 Provider 聚合的
 `providerCounts` 和 `clientKeyCount`。查询分组成员使用账号列表的 `groupId` 筛选，
 不提供独立的分组成员路由；账号的 Provider 不代表整个分组的 Provider。
+`usage` 的 `todayUsd` 和 `retainedTotalUsd` 按实际完成请求的账号统计，计入该账号当前所属的每个分组；
+账号属于多个分组时各分组均计入，与 Client Key 绑定了哪些分组无关。账号改组或移除后，保留期内历史费用按当前成员关系重归属。
 `capacity.totalSlots` 为 `number | null`：`null` 表示可用成员中存在继承无限并发的账号，`0` 表示没有可用槽位。
 `capacity.usedSlots` 继续返回实际在途数；Redis 不可用时为 `null`。
 
