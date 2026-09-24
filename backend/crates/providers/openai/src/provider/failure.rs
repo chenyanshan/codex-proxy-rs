@@ -1090,8 +1090,9 @@ fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnost
         }
         CodexWebSocketExchangeError::InvalidSse(_) => ("decode", "invalid_sse"),
         CodexWebSocketExchangeError::UnexpectedBinaryEvent => ("decode", "unexpected_binary_event"),
-        CodexWebSocketExchangeError::ClosedBeforeTerminal(_) => {
-            ("receive", "closed_before_terminal")
+        CodexWebSocketExchangeError::ClosedBeforeTerminal(_) => ("receive", "upstream_close"),
+        CodexWebSocketExchangeError::StreamEndedBeforeTerminal { reason, .. } => {
+            ("receive", *reason)
         }
         CodexWebSocketExchangeError::ConnectionLimitReached(_) => {
             ("upstream", "connection_limit_reached")
@@ -1187,6 +1188,22 @@ fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> Provider
         }
         CodexWebSocketExchangeError::UnexpectedBinaryEvent => {
             "OpenAI WebSocket returned an unexpected binary event".to_owned()
+        }
+        CodexWebSocketExchangeError::StreamEndedBeforeTerminal {
+            reason,
+            timeout,
+            last_event_type,
+        } => {
+            let mut message =
+                format!("OpenAI WebSocket stream ended before a terminal response ({reason})");
+            if let Some(timeout) = timeout {
+                message.push_str(&format!("; local keepalive timeout after {timeout:?}"));
+            }
+            if let Some(last_event_type) = last_event_type {
+                message.push_str("; last event type: ");
+                message.push_str(last_event_type);
+            }
+            message
         }
         CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. } => {
             "Reused OpenAI WebSocket died before the first upstream event".to_owned()
@@ -1459,6 +1476,7 @@ pub(super) fn websocket_send_state(error: &CodexWebSocketExchangeError) -> Upstr
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
         | CodexWebSocketExchangeError::SendTimeout { .. }
         | CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
+        | CodexWebSocketExchangeError::StreamEndedBeforeTerminal { .. }
         | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
         | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. } => {
             UpstreamSendState::Ambiguous
@@ -1489,6 +1507,7 @@ pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> Provi
         | CodexWebSocketExchangeError::Connect(_)
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
         | CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
+        | CodexWebSocketExchangeError::StreamEndedBeforeTerminal { .. }
         | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. } => {
             ProviderErrorKind::Transport
         }
