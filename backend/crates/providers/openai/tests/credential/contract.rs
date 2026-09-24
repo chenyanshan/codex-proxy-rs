@@ -791,6 +791,90 @@ async fn selector_should_reuse_and_renew_the_account_bound_to_the_same_session()
 }
 
 #[tokio::test]
+async fn session_affinity_waits_for_request_interval_with_bounded_fallback() {
+    for (max_waiting, timeout, interval, expected_account) in [
+        (
+            1,
+            Duration::from_secs(2),
+            Duration::from_millis(500),
+            "acct_first",
+        ),
+        (
+            0,
+            Duration::from_secs(2),
+            Duration::from_secs(10),
+            "acct_second",
+        ),
+        (
+            1,
+            Duration::from_millis(20),
+            Duration::from_secs(10),
+            "acct_second",
+        ),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_first", "at-first");
+        create_account(&store, "acct_second", "at-second");
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        let affinity = Arc::new(MemorySessionAffinity::default());
+        let bound = ProviderAccountId::new("acct_first").unwrap();
+        let provider = ProviderKind::new("openai").unwrap();
+        let key = ProviderSessionAffinityKey::try_new("interval-session").unwrap();
+        affinity
+            .bind(&provider, &key, &bound, Duration::from_secs(60))
+            .await
+            .unwrap();
+        let selector = selector_with_affinity(&store, Arc::clone(&leases), affinity);
+        let attempt = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_interval_session").unwrap(),
+                ClientApiKeyId::new("key_codex_contract").unwrap(),
+            ),
+            NonZeroU32::new(1).unwrap(),
+            SystemTime::now() + Duration::from_secs(5),
+            AccountSelectionPolicy::new(
+                RotationStrategy::Smart,
+                NonZeroU32::new(2).unwrap(),
+                interval,
+            )
+            .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                max_waiting,
+                timeout,
+            }),
+            AccountAttemptContext::new(BTreeSet::new(), None, None)
+                .with_account_scope(contract_account_scope()),
+            None,
+            CancellationToken::new(),
+        );
+        let request_url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+        leases
+            .last_started
+            .lock()
+            .unwrap()
+            .insert(bound, SystemTime::now());
+        let selected = tokio::time::timeout(
+            Duration::from_secs(3),
+            selector.select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &request_url,
+                attempt: &attempt,
+                session_affinity_key: Some(&key),
+            }),
+        )
+        .await
+        .expect("selection must remain bounded")
+        .expect("available account");
+        assert_eq!(selected.account_id().as_str(), expected_account);
+        assert_eq!(selected.account_switch(), expected_account == "acct_second");
+        assert_eq!(
+            leases.requests.lock().unwrap().len(),
+            1,
+            "waiting must not consume a lease"
+        );
+    }
+}
+
+#[tokio::test]
 async fn selector_should_replace_a_busy_affinity_binding_after_the_fallback_succeeds() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first", "at-first");

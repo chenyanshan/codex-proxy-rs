@@ -449,6 +449,17 @@ pub(super) fn openai_response_request_summary(
         "inputItemsCount": input.and_then(Value::as_array).map(Vec::len),
         "toolsType": json_value_kind(tools),
         "toolsCount": tools.and_then(Value::as_array).map(Vec::len),
+        "cachePrefix": {
+            "schemaVersion": 1,
+            "cacheKey": body.get("prompt_cache_key").map(json_fingerprint),
+            "instructions": body.get("instructions").map(json_fingerprint),
+            "tools": tools.map(json_fingerprint),
+            "reasoning": body.get("reasoning").map(json_fingerprint),
+            "text": body.get("text").map(json_fingerprint),
+            "inputHead": input.and_then(Value::as_array).map(|items| {
+                items.iter().take(8).map(json_fingerprint).collect::<Vec<_>>()
+            }),
+        },
         "topLevelFields": body.keys().cloned().collect::<Vec<_>>(),
         "previousResponseIdPresent": request.previous_response_id().is_some(),
         "serviceTier": request.service_tier(),
@@ -457,6 +468,24 @@ pub(super) fn openai_response_request_summary(
             "forceHttpSse": request.force_http_sse,
         },
     })
+}
+
+// 只记录有界数量的摘要，不记录消息/工具内容；流式散列避免大图片请求的额外正文副本。
+fn json_fingerprint(value: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    struct FingerprintWriter(Sha256);
+    impl std::io::Write for FingerprintWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = FingerprintWriter(Sha256::new());
+    serde_json::to_writer(&mut writer, value).expect("JSON value fingerprint writer cannot fail");
+    hex::encode(writer.0.finalize())
 }
 
 pub(super) const fn json_value_kind(value: Option<&Value>) -> &'static str {

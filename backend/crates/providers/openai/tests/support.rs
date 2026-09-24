@@ -655,6 +655,7 @@ pub(crate) struct TestLeaseCoordinator {
     pub(crate) requests: Mutex<Vec<ProviderSchedulingLeaseRequest>>,
     pub(crate) busy: Mutex<bool>,
     pub(crate) busy_accounts: Mutex<BTreeSet<ProviderAccountId>>,
+    pub(crate) last_started: Mutex<BTreeMap<ProviderAccountId, SystemTime>>,
     round_robin_cursor: Mutex<u64>,
 }
 
@@ -670,11 +671,17 @@ impl ProviderLeasePort for TestLeaseCoordinator {
                 .iter()
                 .cloned()
                 .map(|account| {
+                    let last_started_at = self
+                        .last_started
+                        .lock()
+                        .expect("last started lock")
+                        .get(&account)
+                        .copied();
                     (
                         account,
                         AccountRuntimeSignals {
                             in_flight: 0,
-                            last_started_at: None,
+                            last_started_at,
                             quota_reset_at: None,
                             quota_remaining_rank: None,
                             cooldown: None,

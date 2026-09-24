@@ -41,7 +41,12 @@ const DOWNSTREAM_CLIENT_HEADERS: &[(&str, &str)] = &[
     ("sec-fetch-future", "future"),
     ("sec-ch-ua-future", "future"),
     ("x-grok-turn-idx", "7"),
+    ("X-Grok-Model-Override", "synthetic-model"),
+    ("x-grok-session-id", "synthetic-grok-session"),
+    ("X-XAI-Token-Auth", "synthetic-token-auth"),
     ("x-xai-future-field", "future"),
+    ("X-AuthenticateResponse", "authenticate-response"),
+    ("x-authenticateresponse", "duplicate-value"),
 ];
 
 fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
@@ -75,6 +80,8 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
                 ["x-invalid-base64", "%%%"],
                 ["x-still-valid", STANDARD.encode(b"after-invalid")],
                 ["traceparent", STANDARD.encode(b"synthetic-trace")],
+                ["idempotency-key", STANDARD.encode(b"synthetic-idempotency")],
+                ["x-authenticateresponse-business", STANDARD.encode(b"keep")],
                 ["x-business-origin", STANDARD.encode(b"keep")],
                 ["x-cf-business-field", STANDARD.encode(b"keep")],
                 ["sec-ch-business", STANDARD.encode(b"keep")],
@@ -289,6 +296,8 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
     }
     for name in [
         "traceparent",
+        "idempotency-key",
+        "x-authenticateresponse-business",
         "x-business-origin",
         "x-cf-business-field",
         "sec-ch-business",
@@ -426,6 +435,8 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
     );
     for name in [
         "traceparent",
+        "idempotency-key",
+        "x-authenticateresponse-business",
         "x-business-origin",
         "x-cf-business-field",
         "sec-ch-business",

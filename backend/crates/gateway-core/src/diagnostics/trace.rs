@@ -191,6 +191,12 @@ impl TraceContext {
             "jsonValid": parsed.is_some(),
             "metadata": parsed.as_ref().filter(|_| !delta)
                 .map(|value| diagnostic_event_json(value, stage)),
+            // 终态 metadata 可能因体积截断；独立保留数值字段，区分上游缺报和真实零值。
+            "cacheUsage": parsed.as_ref().and_then(|value| value.pointer("/response/usage"))
+                .map(|usage| json!({
+                    "cachedTokens": usage.pointer("/input_tokens_details/cached_tokens").and_then(Value::as_u64),
+                    "cacheWriteTokens": usage.pointer("/input_tokens_details/cache_write_tokens").and_then(Value::as_u64),
+                })),
         });
         self.push(stage, data, delta);
     }
@@ -261,6 +267,7 @@ impl TraceContext {
             data = json!({"truncated": true, "summary": body_fingerprint(&encoded),
                 "eventType": data.get("eventType"), "body": data.get("body"),
                 "jsonValid": data.get("jsonValid"),
+                "cacheUsage": data.get("cacheUsage"),
             });
             encoded = serde_json::to_vec(&data).unwrap_or_default();
         }

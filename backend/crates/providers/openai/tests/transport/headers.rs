@@ -370,6 +370,102 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
 }
 
 #[tokio::test]
+async fn backend_http_should_use_cache_key_only_without_explicit_session_or_thread() {
+    for (cache_key, session_id, thread_id, client_request_id, expected_session, expected_request) in [
+        (
+            Some("cache-session"),
+            None,
+            None,
+            None,
+            Some("cache-session"),
+            "cache-session",
+        ),
+        (
+            Some("cache-session"),
+            Some("codex-session"),
+            None,
+            None,
+            Some("codex-session"),
+            "codex-session",
+        ),
+        (
+            Some("shared-cache"),
+            None,
+            Some("codex-thread"),
+            None,
+            None,
+            "codex-thread",
+        ),
+        (
+            Some("cache-session"),
+            None,
+            None,
+            Some("explicit-request"),
+            Some("cache-session"),
+            "explicit-request",
+        ),
+        (None, None, None, None, None, "req_cache_headers"),
+        (
+            Some("invalid\ncache"),
+            None,
+            None,
+            None,
+            None,
+            "req_cache_headers",
+        ),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind header server");
+        let address = listener.local_addr().expect("header server address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept HTTP client");
+            let request = read_http_request(&mut stream).await;
+            write_completed_sse_response(&mut stream).await;
+            request
+        });
+        let mut request = match cache_key {
+            Some(key) => codex_request_with_prompt_cache_key("gpt-test", "", Vec::new(), key),
+            None => codex_request("gpt-test", "", Vec::new()),
+        };
+        request.force_http_sse = true;
+        let original_body = request.body().clone();
+        let client = CodexBackendClient::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("HTTP client"),
+            format!("http://{address}"),
+            test_wire_profile(),
+        );
+        client
+            .create_response(
+                &request,
+                CodexRequestContext {
+                    session_id,
+                    thread_id,
+                    client_request_id,
+                    ..request_context("req_cache_headers", Some("chatgpt-account"))
+                },
+            )
+            .await
+            .expect("HTTP response");
+        let raw_request = server.await.expect("header server task");
+        assert_eq!(
+            read_header_value(&raw_request, "session-id"),
+            expected_session
+        );
+        assert_eq!(
+            read_header_value(&raw_request, "x-client-request-id"),
+            Some(expected_request)
+        );
+        assert_eq!(read_header_value(&raw_request, "thread-id"), thread_id);
+        assert_eq!(request.body(), &original_body);
+        assert_eq!(request.client_session_id, None);
+    }
+}
+
+#[tokio::test]
 async fn backend_http_should_ignore_unrepresentable_protocol_headers_without_blocking_body() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

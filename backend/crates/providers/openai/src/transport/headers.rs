@@ -166,6 +166,16 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
         let mut headers = self.model_request_headers(&self.profile.snapshot(), context)?;
+        // 通用 Responses 客户端可能只发送缓存键；仅在缺少明确会话/线程身份时，
+        // 用该稳定键补齐上游会话头，避免每轮生成的请求 ID 破坏缓存路由亲和。
+        // Codex 的显式会话及独立线程身份优先，正文缓存键与本地续写身份均不改写。
+        let session_id = context.session_id.or_else(|| {
+            context
+                .thread_id
+                .is_none()
+                .then(|| request.prompt_cache_key())
+                .flatten()
+        });
         headers.insert(
             HeaderName::from_static("x-client-request-id"),
             HeaderValue::from_str(context.request_id)?,
@@ -176,10 +186,10 @@ impl CodexBackendClient {
             context
                 .client_request_id
                 .or(context.thread_id)
-                .or(context.session_id),
+                .or(session_id),
         );
         for (name, value) in [
-            ("session-id", context.session_id),
+            ("session-id", session_id),
             ("thread-id", context.thread_id),
             ("x-codex-window-id", context.codex_window_id),
             ("x-codex-turn-state", context.turn_state),
