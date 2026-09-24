@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import type { KeyUsageModel } from '@/api/modules/key-usage'
-import BaseCard from '@/components/base/BaseCard.vue'
-import { defineTableColumns } from '@/components/base/BaseTable/columns'
-import BaseTable from '@/components/base/BaseTable/index.vue'
+import { BaseCard, BaseTable, defineTableColumns } from '@codex-proxy/ui'
 import { formatInteger } from '@/utils/number'
 import { money } from '../utils/format'
 
