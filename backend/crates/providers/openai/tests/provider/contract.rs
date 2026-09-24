@@ -3462,7 +3462,7 @@ async fn selection_infrastructure_errors_have_a_distinct_classification() {
 }
 
 #[tokio::test]
-async fn websocket_close_after_delivery_preserves_details_and_reconnects_through_pool() {
+async fn repeated_message_too_big_closes_keep_session_on_websocket() {
     const ACCOUNT_ID: &str = "acct_websocket_close";
     const CONVERSATION_ID: &str = "conversation-websocket-close-after-delivery";
     const SESSION_ID: &str = "committed-websocket-session";
@@ -3477,48 +3477,50 @@ async fn websocket_close_after_delivery_preserves_details_and_reconnects_through
         listener.local_addr().expect("listener address")
     );
     let server = tokio::spawn(async move {
-        let (stream, _) = listener
-            .accept()
-            .await
-            .expect("accept WebSocket connection");
-        let mut websocket = accept_codex_test_websocket(stream).await;
-        let _request = websocket
-            .next()
-            .await
-            .expect("WebSocket request")
-            .expect("valid WebSocket request");
-        websocket
-            .send(Message::Text(
-                json!({
-                    "type": "response.created",
-                    "response": {
-                        "id": "resp_before_committed_close",
-                        "model": "gpt-5.4"
-                    }
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .expect("start WebSocket response");
-        websocket
-            .send(Message::Text(
-                json!({
-                    "type": "response.output_text.delta",
-                    "delta": "partial output"
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .expect("send semantic WebSocket event");
-        websocket
-            .close(Some(CloseFrame {
-                code: CloseCode::Size,
-                reason: "message too big".into(),
-            }))
-            .await
-            .expect("close WebSocket");
+        for _ in 0..3 {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept WebSocket connection");
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _request = websocket
+                .next()
+                .await
+                .expect("WebSocket request")
+                .expect("valid WebSocket request");
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "response.created",
+                        "response": {
+                            "id": "resp_before_committed_close",
+                            "model": "gpt-5.4"
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("start WebSocket response");
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "response.output_text.delta",
+                        "delta": "partial output"
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("send semantic WebSocket event");
+            websocket
+                .close(Some(CloseFrame {
+                    code: CloseCode::Size,
+                    reason: "message too big".into(),
+                }))
+                .await
+                .expect("close WebSocket");
+        }
 
         let (stream, _) = listener
             .accept()
@@ -3567,55 +3569,61 @@ async fn websocket_close_after_delivery_preserves_details_and_reconnects_through
             .expect("complete next-turn WebSocket request");
     });
 
-    let provider = provider_with_base_url(&store, base_url);
-    let first_operation = Operation::Generate(generate_with_persisted_session_context(
-        ACCOUNT_ID,
-        CONVERSATION_ID,
-        SESSION_ID,
-        "thread-first",
-    ));
-    let mut stream = Arc::clone(&provider)
-        .execute(
-            planned_request("openai", first_operation),
-            context("req_websocket_close", CancellationToken::new()),
-        )
-        .await
-        .expect("prepare WebSocket provider stream");
-    let error = loop {
-        match stream.next().await {
-            Some(Ok(_)) => {}
-            Some(Err(error)) => break error,
-            None => panic!("WebSocket close must surface a provider error"),
-        }
-    };
-    drop(stream);
+    let provider = provider_with_base_url_and_retry_budget(&store, base_url, 2);
+    for index in 0..3 {
+        let operation = Operation::Generate(generate_with_persisted_session_context(
+            ACCOUNT_ID,
+            CONVERSATION_ID,
+            SESSION_ID,
+            &format!("thread-{index}"),
+        ));
+        let mut stream = Arc::clone(&provider)
+            .execute(
+                planned_request("openai", operation),
+                context(
+                    &format!("req_websocket_close_{index}"),
+                    CancellationToken::new(),
+                ),
+            )
+            .await
+            .expect("prepare WebSocket provider stream");
+        assert_eq!(stream.metadata().transport().as_str(), "websocket");
+        let error = loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("WebSocket close must surface a provider error"),
+            }
+        };
+        drop(stream);
 
-    assert!(!format!("{error:?}").contains("message too big"));
-    assert!(!error.to_string().contains("message too big"));
-    // 上游 close 1009 是 RFC 6455 "message too big"：必须归因为请求自身问题，
-    // 而不是 provider 传输故障（否则会被熔断器和换号逻辑误伤其他请求）。
-    assert_eq!(error.kind(), ProviderErrorKind::MessageTooBig);
-    assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
-    assert!(
-        !error.allows_pre_delivery_retry(),
-        "a close after the delivery boundary must not request a hidden replay"
-    );
-    let detail = error
-        .client_visible_upstream_error()
-        .expect("WebSocket close detail");
-    assert_eq!(detail.message(), "message too big");
-    assert_eq!(detail.code(), Some("message_too_big"));
-    assert_eq!(detail.error_type(), Some("invalid_request_error"));
-    assert_eq!(
-        error.upstream_code().map(|code| code.as_str()),
-        Some("websocket_close_1009")
-    );
+        assert!(!format!("{error:?}").contains("message too big"));
+        assert!(!error.to_string().contains("message too big"));
+        // 上游 close 1009 是 RFC 6455 "message too big"：必须归因为请求自身问题，
+        // 而不是 provider 传输故障（否则会被熔断器和换号逻辑误伤其他请求）。
+        assert_eq!(error.kind(), ProviderErrorKind::MessageTooBig);
+        assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
+        assert!(
+            !error.allows_pre_delivery_retry(),
+            "a close after the delivery boundary must not request a hidden replay"
+        );
+        let detail = error
+            .client_visible_upstream_error()
+            .expect("WebSocket close detail");
+        assert_eq!(detail.message(), "message too big");
+        assert_eq!(detail.code(), Some("message_too_big"));
+        assert_eq!(detail.error_type(), Some("invalid_request_error"));
+        assert_eq!(
+            error.upstream_code().map(|code| code.as_str()),
+            Some("websocket_close_1009")
+        );
+    }
 
     let second_operation = Operation::Generate(generate_with_persisted_session_context(
         ACCOUNT_ID,
         CONVERSATION_ID,
         SESSION_ID,
-        "thread-second",
+        "thread-after-closes",
     ));
     let mut next_stream = provider
         .execute(

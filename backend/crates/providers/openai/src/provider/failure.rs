@@ -541,11 +541,13 @@ pub(super) fn apply_websocket_recovery_policy(
         );
         return;
     }
-    let session_budget_exhausted = context.session_affinity_key.is_some_and(|key| {
-        context
-            .session_transport_recovery
-            .record_websocket_failure(key, context.max_retries)
-    });
+    // close 1009 只拒绝当前请求，不代表会话的 WS 传输不可用。
+    let session_budget_exhausted = failure.error.kind() != ProviderErrorKind::MessageTooBig
+        && context.session_affinity_key.is_some_and(|key| {
+            context
+                .session_transport_recovery
+                .record_websocket_failure(key, context.max_retries)
+        });
     let send_state = failure.error.send_state();
     let post_send = matches!(
         send_state,
