@@ -10799,9 +10799,8 @@ async fn oauth_http_transport_overrides_websocket_preference_and_delivers_termin
     while let Some(event) = stream.next().await {
         completed |= event
             .unwrap()
-            .canonical_facts()
-            .iter()
-            .any(|event| matches!(event, GatewayEvent::Completed(_)));
+            .wire_event()
+            .is_some_and(|wire| wire.data()["type"] == "response.completed");
     }
     assert!(completed, "HTTP/SSE must deliver a terminal response");
     assert_eq!(

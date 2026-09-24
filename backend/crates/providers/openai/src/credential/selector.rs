@@ -393,6 +393,28 @@ impl CodexCredentialSelector {
             request.attempt.deadline(),
             request.attempt.concurrency_wait_budget(),
         );
+        let continuation_account = match request.attempt.continuation_attempt() {
+            ContinuationAttempt::Native => request
+                .attempt
+                .continuation()
+                .and_then(gateway_core::engine::continuation::ContinuationBinding::pinned)
+                .map(|continuation| continuation.account().clone()),
+            ContinuationAttempt::ReplayOwner => request
+                .attempt
+                .account_state_owner()
+                .filter(|owner| owner.provider() == &self.provider_kind)
+                .map(|owner| owner.account().clone()),
+            ContinuationAttempt::None | ContinuationAttempt::ReplayAny => None,
+        };
+        let required_account = request.attempt.required_account().cloned();
+        if required_account
+            .as_ref()
+            .zip(continuation_account.as_ref())
+            .is_some_and(|(required, continuation)| required != continuation)
+        {
+            return Err(CredentialSelectionError::NoEligibleCredential);
+        }
+        let pinned_account = required_account.or(continuation_account);
         let mut snapshot_retries = 0;
         'capacity: loop {
             let diagnostic = request.attempt.is_diagnostic_required_account();
@@ -436,7 +458,9 @@ impl CodexCredentialSelector {
                 .collect::<Vec<_>>();
             let mut eligible = Vec::with_capacity(accounts.len());
             for account in accounts {
-                if request.requires_websocket {
+                if request.requires_websocket
+                    && pinned_account.as_ref().is_none_or(|id| id == account.id())
+                {
                     let runtime = match self.repository.load_runtime_credential(&account).await {
                         Ok(runtime) => runtime,
                         Err(CredentialRepositoryError::RevisionConflict) => {
@@ -510,28 +534,6 @@ impl CodexCredentialSelector {
                     AccountCandidate { account, signals }
                 })
                 .collect::<Vec<_>>();
-            let continuation_account = match request.attempt.continuation_attempt() {
-                ContinuationAttempt::Native => request
-                    .attempt
-                    .continuation()
-                    .and_then(gateway_core::engine::continuation::ContinuationBinding::pinned)
-                    .map(|continuation| continuation.account().clone()),
-                ContinuationAttempt::ReplayOwner => request
-                    .attempt
-                    .account_state_owner()
-                    .filter(|owner| owner.provider() == &self.provider_kind)
-                    .map(|owner| owner.account().clone()),
-                ContinuationAttempt::None | ContinuationAttempt::ReplayAny => None,
-            };
-            let required_account = request.attempt.required_account().cloned();
-            if required_account
-                .as_ref()
-                .zip(continuation_account.as_ref())
-                .is_some_and(|(required, continuation)| required != continuation)
-            {
-                return Err(CredentialSelectionError::NoEligibleCredential);
-            }
-            let pinned_account = required_account.or_else(|| continuation_account.clone());
             let mut affinity = if diagnostic {
                 AffinitySelection::default()
             } else {
