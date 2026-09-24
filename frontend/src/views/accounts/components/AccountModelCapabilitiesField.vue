@@ -71,7 +71,7 @@ watch(() => props.accountId, () => {
 <template>
   <BaseFormItem label="模型输入能力">
     <template #extra>
-      <span class="text-cp-xs text-cp-text-quaternary">控制 /v1/models 展示，不会替上游验证能力</span>
+      <span class="text-cp-xs text-cp-text-quaternary">影响 Codex 模型目录展示，不会验证上游能力</span>
     </template>
     <BaseScrollbar v-if="models.length" max-height="15rem" class="min-w-0 -m-1">
       <div class="grid gap-2 p-1" role="group" aria-label="模型输入能力">
