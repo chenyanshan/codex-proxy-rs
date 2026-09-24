@@ -86,7 +86,9 @@ use crate::transport::request::{
 };
 use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
-use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason, WEBSOCKET_CLOSE_MESSAGE_TOO_BIG};
+use crate::transport::websocket::{
+    CodexWebSocketExchangeError, PreviousResponseUnavailableReason, WEBSOCKET_CLOSE_MESSAGE_TOO_BIG,
+};
 use crate::transport::{
     CODEX_ALPHA_SEARCH_PATH, CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH,
     CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,

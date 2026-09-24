@@ -854,7 +854,9 @@ fn project_wire(wire: ProtocolWireEvent) -> Result<WireEvent, PluginFault> {
 
 pub(super) fn gateway_fault(error: GatewayError) -> PluginFault {
     let code = match error.kind() {
-        GatewayErrorKind::InvalidRequest | GatewayErrorKind::MessageTooBig => ErrorCode::InvalidInput,
+        GatewayErrorKind::InvalidRequest | GatewayErrorKind::MessageTooBig => {
+            ErrorCode::InvalidInput
+        }
         GatewayErrorKind::Unsupported | GatewayErrorKind::ModelNotFound => ErrorCode::Unsupported,
         GatewayErrorKind::Unauthorized => ErrorCode::PermissionDenied,
         GatewayErrorKind::PolicyDenied => ErrorCode::Rejected,

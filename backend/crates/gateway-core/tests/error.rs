@@ -205,12 +205,15 @@ fn continuation_recovery_should_keep_its_internal_classification_and_client_cont
 
 #[test]
 fn message_too_big_should_map_to_a_request_scoped_client_contract() {
-    let error = ProviderError::new(ProviderErrorKind::MessageTooBig, UpstreamSendState::Ambiguous)
-        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-            "upstream websocket message too big",
-            Some("message_too_big".to_owned()),
-            Some("invalid_request_error".to_owned()),
-        ));
+    let error = ProviderError::new(
+        ProviderErrorKind::MessageTooBig,
+        UpstreamSendState::Ambiguous,
+    )
+    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+        "upstream websocket message too big",
+        Some("message_too_big".to_owned()),
+        Some("invalid_request_error".to_owned()),
+    ));
     let gateway = GatewayError::from_provider(&error);
 
     assert_eq!(error.kind().as_str(), "message_too_big");
