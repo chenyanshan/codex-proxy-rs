@@ -271,9 +271,7 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/
 
 核心不变量：
 
-- 进入执行的客户端请求对应一条 `model_requests`；attempt 是请求内事实，不建立第二张权威表。
-  路由或准入阶段拒绝写入 `ops_events` 的 `request_entry/reject`，消息携带 request ID 和 Key ID，
-  不伪造执行行；这些拒绝尚不计入基于 `model_requests` 的请求统计。
+- 一个客户端请求对应一条 `model_requests`；attempt 是请求内事实，不建立第二张权威表。
 - Provider 的一次 `execute` 只选择一个 credential 并返回一个冷流；换号、重试和 fallback 由 Core 决定。
 - `not_sent`、`sent`、`ambiguous` 是单调的上游发送边界；结果不明确时不能假定上游未收到请求。
 - downstream commit 是不可撤回的交付承诺。commit 后禁止换号、重试和 fallback。
@@ -281,16 +279,6 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/
   重试与提交边界。具体错误合同见 [数据面接口](api.md#3-openai-数据面与模型目录)。
 - Provider 可将明确容量拒绝标记为有界同账号退避，Core 在既有安全重放边界内执行，按账号维护请求内
   预算，耗尽后复用普通换号路径。该退避消耗总路由预算，与 WS 传输恢复、OAuth 刷新及账号额度冷却分开。
-- 普通请求或探测的 transport、timeout、protocol 错误不改变 Provider 类型的全局可路由性。
-  账号凭据/额度事实、可选账号容量冻结与 WS origin+出口 opening breaker 各自保持原有范围。
-- HTTP Responses 的可靠 `not_sent` 建连失败由 Core 决定同账号重试，保留 HTTP 传输。
-  每请求最多 4 次 opening，共享首次建连起 30 秒窗口；HTTP opening 保守计数（包含池复用），
-  WS 只在物理建连时计数，换传输或账号不重置。退避为 500/1000/2000ms 加减 20% 抖动。
-  等待重试与恢复选账号计入窗口；该窗口只约束建立连接，不覆盖业务响应头等待和长流生成。
-  已发送、发送不确定、产生执行副作用、下游已提交或存在续写绑定时不使用这条新增重试路径。
-  已识别的 TLS/配置错误不申请这类重试；底层库未提供结构化原因的代理失败只做有界恢复。
-- OpenAI HTTP/WS 的实际建连共用每进程 128 个活动名额、1024 个等待名额；等待包含在建连超时内，
-  取消或失败释放名额，已建立长流不占建连名额。此上限是资源保护配置，不代表上游容量承诺。
 - 跨 Provider 只在账号范围和能力都允许，且请求尚未到达上游或已被证明可安全重放时发生。
 - 可恢复观测写入失败不能替换已经确定的客户端协议结果。
 

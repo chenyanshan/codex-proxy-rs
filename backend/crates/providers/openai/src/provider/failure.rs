@@ -858,8 +858,8 @@ pub(super) fn map_client_error(
     if let Some(failure) = error.upstream_failure() {
         return map_upstream_failure(failure, observation, ReplayBoundary::BeforeSemanticOutput);
     }
-    let connect_retry =
-        matches!(&error, CodexClientError::Http(error) if transient_http_connect(error));
+    let connect_retry = !local_connection_capacity
+        && matches!(&error, CodexClientError::Http(error) if transient_http_connect(error));
     let mut failure = match error {
         CodexClientError::ConnectionBudgetExhausted => MappedProviderFailure::plain(
             provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent)

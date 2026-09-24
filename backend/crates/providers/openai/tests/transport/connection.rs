@@ -61,6 +61,52 @@ async fn cold_connection_admission_bounds_queue_and_releases_cancelled_work() {
             .is_err()
     );
     crate::provider::assert_local_connection_capacity_is_not_an_upstream_failure().await;
+
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", upstream.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for _ in 0..3 {
+            let (mut http, _) = upstream.accept().await.unwrap();
+            assert!(
+                read_http_request(&mut http)
+                    .await
+                    .starts_with("POST /codex/responses")
+            );
+            write_completed_sse_response(&mut http).await;
+        }
+        let (stream, _) = upstream.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                completed_websocket_response("resp_after_local_capacity", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+    });
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        base_url,
+        test_wire_profile(),
+    );
+    for attempt in 0..3 {
+        let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
+        request.use_websocket = true;
+        request.local_conversation_id = Some(format!("capacity-{attempt}"));
+        let response = backend
+            .create_response(
+                &request,
+                request_context("req_local_ws_capacity", Some("chatgpt-account")),
+            )
+            .await
+            .expect("local WS capacity should fall back to HTTP");
+        assert_eq!(response.transport, CodexBackendTransport::HttpSse);
+        assert_eq!(
+            response.transport_metrics.decision,
+            Some(CodexTransportDecision::Http2LocalConnectionCapacity)
+        );
+    }
+
     tasks[0].abort();
     sockets.push(
         timeout(Duration::from_secs(3), listener.accept())
@@ -83,4 +129,24 @@ async fn cold_connection_admission_bounds_queue_and_releases_cancelled_work() {
         .unwrap();
     fresh.abort();
     let _ = fresh.await;
+    drop(sockets);
+
+    let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
+    request.use_websocket = true;
+    request.local_conversation_id = Some("capacity-recovered".to_owned());
+    let response = timeout(
+        Duration::from_secs(3),
+        backend.create_response(
+            &request,
+            request_context("req_ws_after_capacity", Some("chatgpt-account")),
+        ),
+    )
+    .await
+    .unwrap()
+    .expect("local capacity must not open the WS origin breaker");
+    assert_eq!(response.transport, CodexBackendTransport::WebSocket);
+    timeout(Duration::from_secs(3), server)
+        .await
+        .unwrap()
+        .unwrap();
 }

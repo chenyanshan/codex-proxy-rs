@@ -583,6 +583,7 @@ pub enum CodexTransportDecision {
     ExactWebSocket,
     RequiredWebSocket,
     Http2WebSocketBudgetExhausted,
+    Http2LocalConnectionCapacity,
     Http2BreakerOpen,
     Http2PoolUnavailable,
 }
@@ -596,6 +597,7 @@ impl CodexTransportDecision {
             Self::ExactWebSocket => "ws_exact_required",
             Self::RequiredWebSocket => "ws_required",
             Self::Http2WebSocketBudgetExhausted => "http2_ws_budget_exhausted",
+            Self::Http2LocalConnectionCapacity => "http2_local_connection_capacity",
             Self::Http2BreakerOpen => "http2_breaker_open",
             Self::Http2PoolUnavailable => "http2_pool_unavailable",
         }
@@ -1070,6 +1072,9 @@ pub(super) fn websocket_success_decision(
 pub(super) fn local_http_fallback_decision(
     error: &CodexWebSocketExchangeError,
 ) -> Option<CodexTransportDecision> {
+    if crate::transport::connection::is_admission_failure(error) {
+        return Some(CodexTransportDecision::Http2LocalConnectionCapacity);
+    }
     match error.classified() {
         CodexWebSocketExchangeError::OriginCircuitOpen
         | CodexWebSocketExchangeError::OriginHalfOpenBusy => {

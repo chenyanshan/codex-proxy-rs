@@ -11359,4 +11359,5 @@ pub(crate) async fn assert_local_connection_capacity_is_not_an_upstream_failure(
         failure.diagnostic().unwrap().code(),
         Some("local_connection_capacity")
     );
+    assert!(failure.pre_delivery_retry().is_none());
 }

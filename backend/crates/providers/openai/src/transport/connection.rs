@@ -11,6 +11,8 @@ use tower_service::Service;
 // 为单副本的文件描述符和 TLS 握手保留硬上限；不限制已经建立的长流。
 const ACTIVE_CONNECTIONS: usize = 128;
 const WAITING_CONNECTIONS: usize = 1024;
+static ACTIVE: OnceLock<Semaphore> = OnceLock::new();
+static WAITING: OnceLock<Semaphore> = OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
 #[error("local connection capacity unavailable")]
@@ -33,14 +35,22 @@ pub(crate) fn is_admission_failure(error: &(dyn std::error::Error + 'static)) ->
     false
 }
 
+fn admission_rejected() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::WouldBlock, ConnectionAdmissionRejected)
+}
+
+/// 可回退 HTTP 的 WS 快路径不排队，避免本地等待被当作上游 opening 变慢。
+pub(super) fn try_acquire() -> Result<SemaphorePermit<'static>, std::io::Error> {
+    ACTIVE
+        .get_or_init(|| Semaphore::new(ACTIVE_CONNECTIONS))
+        .try_acquire()
+        .map_err(|_| admission_rejected())
+}
+
 pub(super) async fn acquire() -> Result<SemaphorePermit<'static>, std::io::Error> {
-    static ACTIVE: OnceLock<Semaphore> = OnceLock::new();
-    static WAITING: OnceLock<Semaphore> = OnceLock::new();
     let active = ACTIVE.get_or_init(|| Semaphore::new(ACTIVE_CONNECTIONS));
     let waiting = WAITING.get_or_init(|| Semaphore::new(WAITING_CONNECTIONS));
-    let queued = waiting.try_acquire().map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::WouldBlock, ConnectionAdmissionRejected)
-    })?;
+    let queued = waiting.try_acquire().map_err(|_| admission_rejected())?;
     let permit = active
         .acquire()
         .await
