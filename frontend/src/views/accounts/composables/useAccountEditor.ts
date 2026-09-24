@@ -55,7 +55,11 @@ export function useAccountEditor(options: {
       const configuration = parseApiKeyConfiguration(detail.credentialConfiguration)
       if (!configuration)
         throw new Error('该账号没有 API Key 上游设置')
-      apiKey.value = { ...emptyApiKeyAccountForm(), ...configuration }
+      apiKey.value = {
+        ...emptyApiKeyAccountForm(),
+        ...configuration,
+        modelPresentationOverrides: { ...configuration.modelPresentationOverrides },
+      }
       savedConfiguration.value = configuration
       configurationReady.value = true
     }
@@ -140,11 +144,17 @@ export function useAccountEditor(options: {
         apiKey.value.apiKey !== ''
         || apiKey.value.base_url.trim() !== savedConfiguration.value?.base_url
         || apiKey.value.transport !== savedConfiguration.value?.transport
+        || JSON.stringify(apiKey.value.modelPresentationOverrides ?? {}) !== JSON.stringify(savedConfiguration.value?.modelPresentationOverrides ?? {})
       )
       await updateAccount({
         ...settings,
         connection: connectionChanged
-          ? { baseUrl: apiKey.value.base_url.trim(), transport: apiKey.value.transport, apiKey: apiKey.value.apiKey || undefined }
+          ? {
+              baseUrl: apiKey.value.base_url.trim(),
+              transport: apiKey.value.transport,
+              apiKey: apiKey.value.apiKey || undefined,
+              modelPresentationOverrides: apiKey.value.modelPresentationOverrides ?? {},
+            }
           : isOAuth && oauthTransport.value !== savedOAuthTransport.value
             ? { transport: oauthTransport.value }
             : undefined,

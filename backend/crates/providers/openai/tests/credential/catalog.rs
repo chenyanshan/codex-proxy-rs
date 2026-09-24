@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1294,6 +1295,159 @@ async fn api_key_catalog_does_not_replace_native_metadata_for_shared_models() {
         .expect("target API account directory");
     assert_eq!(api_documents.len(), 1);
     assert_ne!(api_documents[0].document().protocol(), "codex");
+}
+
+/// 目录里的 Adapted 条目必须携带该账号声明的图片能力；未声明的模型保持纯文本。
+#[tokio::test]
+async fn api_key_presentation_overrides_publish_declared_image_capability() {
+    use gateway_core::routing::ProviderModelContent;
+    use provider_openai::credential::{ApiKeyModelPresentationOverride, ResponsesTransport};
+
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key_with_presentation_overrides(
+            "acct_vision",
+            upstream.uri(),
+            ResponsesTransport::Http,
+            BTreeMap::from([
+                (
+                    "vision-model".to_owned(),
+                    ApiKeyModelPresentationOverride {
+                        image_input: true,
+                        image_detail_original: true,
+                    },
+                ),
+                // 未在上游目录出现的模型不能凭覆盖出现在结果里。
+                (
+                    "ghost-model".to_owned(),
+                    ApiKeyModelPresentationOverride {
+                        image_input: true,
+                        image_detail_original: false,
+                    },
+                ),
+            ]),
+        )
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data":[{"id":"vision-model"},{"id":"text-model"}]
+        })))
+        .mount(&upstream)
+        .await;
+    let service = service_with_catalog_cache(&store, upstream.uri(), catalog_cache());
+    service.synchronize().await.expect("upstream directory");
+    let account = store.account("acct_vision").expect("API account");
+    let models = service
+        .client_model_catalog(&client_scope(&[account]), "1.0.0")
+        .await
+        .expect("client catalog");
+    let capabilities = models
+        .iter()
+        .map(|descriptor| {
+            let ProviderModelContent::Adapted(presentation) = &descriptor.content else {
+                panic!("API Key models are adapted")
+            };
+            (
+                descriptor.model.as_str().to_owned(),
+                (
+                    presentation.image_input(),
+                    presentation.image_detail_original(),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        capabilities,
+        BTreeMap::from([
+            ("vision-model".to_owned(), (true, true)),
+            ("text-model".to_owned(), (false, false)),
+        ])
+    );
+}
+
+/// 同一 Key 可路由到多个账号时，冲突的展示能力必须保守合并，不能由账号排序决定。
+#[tokio::test]
+async fn api_key_presentation_overrides_merge_conservatively_across_accounts() {
+    use gateway_core::routing::ProviderModelContent;
+    use provider_openai::credential::{ApiKeyModelPresentationOverride, ResponsesTransport};
+
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    let override_for = |image_input: bool, image_detail_original: bool| {
+        BTreeMap::from([(
+            "vision-model".to_owned(),
+            ApiKeyModelPresentationOverride {
+                image_input,
+                image_detail_original,
+            },
+        )])
+    };
+    // 低 ID 账号声明能力更弱，确保 AND 合并不是排序副作用。
+    store
+        .seed_api_key_with_presentation_overrides(
+            "acct_a",
+            upstream.uri(),
+            ResponsesTransport::Http,
+            override_for(true, false),
+        )
+        .await;
+    store
+        .seed_api_key_with_presentation_overrides(
+            "acct_b",
+            upstream.uri(),
+            ResponsesTransport::Http,
+            override_for(true, true),
+        )
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"data":[{"id":"vision-model"}]})),
+        )
+        .mount(&upstream)
+        .await;
+    let service = service_with_catalog_cache(&store, upstream.uri(), catalog_cache());
+    service.synchronize().await.expect("upstream directory");
+    let a = store.account("acct_a").expect("account A");
+    let b = store.account("acct_b").expect("account B");
+    let image_capability = |models: &[gateway_core::routing::ProviderModelDescriptor]| {
+        let ProviderModelContent::Adapted(presentation) = &models[0].content else {
+            panic!("API Key models are adapted")
+        };
+        (
+            presentation.image_input(),
+            presentation.image_detail_original(),
+        )
+    };
+    let both = service
+        .client_model_catalog(&client_scope(&[a.clone(), b.clone()]), "1.0.0")
+        .await
+        .expect("combined client catalog");
+    assert_eq!(
+        image_capability(&both),
+        (true, false),
+        "只有全部账号声明的能力才能公布"
+    );
+    let only_a = service
+        .client_model_catalog(&client_scope(std::slice::from_ref(&a)), "1.0.0")
+        .await
+        .expect("account A catalog");
+    assert_eq!(image_capability(&only_a), (true, false));
+    let only_b = service
+        .client_model_catalog(&client_scope(std::slice::from_ref(&b)), "1.0.0")
+        .await
+        .expect("account B catalog");
+    assert_eq!(image_capability(&only_b), (true, true));
+
+    store.set_enabled(a.id(), false).await.expect("disable A");
+    let eligible = service
+        .client_model_catalog(&client_scope(&[a, b]), "1.0.0")
+        .await
+        .expect("disabled account is excluded");
+    assert_eq!(image_capability(&eligible), (true, true));
 }
 
 #[tokio::test]

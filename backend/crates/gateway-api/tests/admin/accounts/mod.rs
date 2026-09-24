@@ -706,6 +706,30 @@ mod actions {
     }
 
     #[test]
+    fn account_connection_update_accepts_model_presentation_overrides() {
+        let request = json!({
+            "accountId": "acct_api",
+            "enabled": true,
+            "concurrencyLimit": null,
+            "weight": 1,
+            "groupIds": [],
+            "connection": {
+                "baseUrl": "https://api.example.invalid/v1",
+                "transport": "http",
+                "modelPresentationOverrides": {"vision-model": {"imageInput": true}}
+            }
+        });
+        serde_json::from_value::<UpdateAccountRequest>(request.clone())
+            .expect("decode account update")
+            .validate()
+            .expect("accept account capability update");
+        let mut invalid = request;
+        let overrides = invalid["connection"]["modelPresentationOverrides"].take();
+        invalid["modelPresentationOverrides"] = overrides;
+        assert!(serde_json::from_value::<UpdateAccountRequest>(invalid).is_err());
+    }
+
+    #[test]
     fn credential_recovery_requests_should_not_accept_client_revision_fences() {
         let authorization: StartAccountAuthorizationRequest = serde_json::from_value(json!({
             "provider": "openai",

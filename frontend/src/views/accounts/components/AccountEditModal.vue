@@ -8,6 +8,7 @@ import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { isOpenAiApiKeyAccount, isOpenAiOAuthAccount } from '../utils/upstreamApiKey'
 import AccountApiKeyFields from './AccountApiKeyFields.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
+import AccountModelCapabilitiesField from './AccountModelCapabilitiesField.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
@@ -76,7 +77,10 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         <p v-else-if="!configurationReady" role="alert" class="m-0 text-cp-sm text-cp-error">
           上游设置读取失败，请关闭后重试
         </p>
-        <AccountApiKeyFields v-else-if="isOpenAiApiKeyAccount(account)" v-model="apiKey" editing :disabled="saving" />
+        <template v-else-if="isOpenAiApiKeyAccount(account)">
+          <AccountApiKeyFields v-model="apiKey" editing :disabled="saving" />
+          <AccountModelCapabilitiesField v-model="apiKey.modelPresentationOverrides" :account-id="account.id" :disabled="saving" />
+        </template>
         <BaseFormItem v-else label="传输方式">
           <BaseSegmented v-model="oauthTransport" label="传输方式" :options="transportOptions" :disabled="saving" />
           <p class="m-0 mt-2 text-cp-xs text-cp-text-secondary">

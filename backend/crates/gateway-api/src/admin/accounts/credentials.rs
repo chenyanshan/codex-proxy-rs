@@ -342,6 +342,8 @@ pub struct AccountConnectionUpdateRequest {
     pub base_url: Option<String>,
     pub transport: String,
     pub api_key: Option<String>,
+    /// API Key 账号的模型展示能力覆盖；省略时保留当前声明。
+    pub model_presentation_overrides: Option<Map<String, Value>>,
 }
 
 impl AccountConnectionUpdateRequest {
@@ -370,6 +372,12 @@ impl AccountConnectionUpdateRequest {
         }
         if let Some(key) = self.api_key {
             material.insert("api_key".to_owned(), Value::String(key));
+        }
+        if let Some(overrides) = self.model_presentation_overrides {
+            material.insert(
+                "modelPresentationOverrides".to_owned(),
+                Value::Object(overrides),
+            );
         }
         ProviderDocument::new(OpaqueProviderData::new(material))
     }

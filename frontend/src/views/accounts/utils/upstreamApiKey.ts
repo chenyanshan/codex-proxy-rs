@@ -14,13 +14,28 @@ export interface ApiKeyAccountForm extends ApiKeyConfiguration {
 }
 
 export function emptyApiKeyAccountForm(): ApiKeyAccountForm {
-  return { name: '', base_url: '', apiKey: '', transport: 'http' }
+  return { name: '', base_url: '', apiKey: '', transport: 'http', modelPresentationOverrides: {} }
 }
 
 export function parseApiKeyConfiguration(value: Record<string, unknown> | undefined): ApiKeyConfiguration | undefined {
   if (!value || typeof value.base_url !== 'string' || (value.transport !== 'http' && value.transport !== 'prefer_websocket'))
     return undefined
-  return { base_url: value.base_url, transport: value.transport }
+  const rawOverrides = value.modelPresentationOverrides
+  const modelPresentationOverrides: NonNullable<ApiKeyConfiguration['modelPresentationOverrides']> = {}
+  if (rawOverrides !== undefined) {
+    if (!rawOverrides || typeof rawOverrides !== 'object' || Array.isArray(rawOverrides))
+      return undefined
+    for (const [id, entry] of Object.entries(rawOverrides)) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+        return undefined
+      const imageInput = 'imageInput' in entry ? entry.imageInput : false
+      const imageDetailOriginal = 'imageDetailOriginal' in entry ? entry.imageDetailOriginal : false
+      if (typeof imageInput !== 'boolean' || typeof imageDetailOriginal !== 'boolean')
+        return undefined
+      modelPresentationOverrides[id] = { imageInput, imageDetailOriginal }
+    }
+  }
+  return { base_url: value.base_url, transport: value.transport, modelPresentationOverrides }
 }
 
 export function apiKeyAccountError(form: ApiKeyAccountForm, editing = false): string | undefined {
