@@ -578,6 +578,21 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 .map_err(map_credential_admin_error)?;
             return prepared_rotation(prepared, command.account.provider_kind);
         }
+        if command
+            .provider_material
+            .expose_to_provider()
+            .expose_to_provider()
+            .contains_key("transport")
+        {
+            let prepared = CodexCredentialAdmin
+                .prepare_transport_update(
+                    current,
+                    Value::Object(command.provider_material.into_provider_data().into_inner()),
+                )
+                .map_err(map_credential_admin_error)?;
+            return prepared_rotation(prepared, command.account.provider_kind)
+                .map(PreparedCredentialRotation::preserving_credential_state);
+        }
         let mut secret = rotation_secret(command.provider_material)?;
         if secret.id_token.is_none() {
             let runtime = CodexCredentialCodec::decode(&current.credential)
@@ -627,23 +642,23 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<Option<ProviderDocument>, ProviderAdminError> {
-        let account = self.account(account_id).await?;
-        if account.authentication_kind() != crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY {
-            return Ok(None);
-        }
+        self.account(account_id).await?;
         let current = self
             .accounts
             .load_current_credential(account_id)
             .await
             .map_err(map_store_error)?;
-        let crate::credential::CodexCredentialData::ApiKey(data) =
-            CodexCredentialCodec::decode_complete(&current.credential)
-                .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?
-        else {
-            return Err(provider_admin_error(ProviderAdminErrorKind::Invalid));
+        let data = CodexCredentialCodec::decode_complete(&current.credential)
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+        let value = match data {
+            crate::credential::CodexCredentialData::ApiKey(data) => {
+                serde_json::to_value(data.configuration())
+                    .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?
+            }
+            crate::credential::CodexCredentialData::OAuth(data) => {
+                serde_json::json!({"transport": data.transport})
+            }
         };
-        let value = serde_json::to_value(data.configuration())
-            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
         let object = value
             .as_object()
             .cloned()
@@ -991,6 +1006,7 @@ fn prepared_rotation(
             email: profile.email,
             plan_type: profile.plan_type,
             preserve_profile,
+            preserve_credential_state: false,
             provider_material: ProviderDocument::new(OpaqueProviderData::new(
                 credential.into_inner(),
             )),

@@ -217,6 +217,7 @@ impl PluginProvider {
                 email: facts.email,
                 plan_type: facts.plan_type,
                 preserve_profile: !matches!(change, CredentialChange::Rotate),
+                preserve_credential_state: false,
                 provider_material: ProviderDocument::new(OpaqueProviderData::new(facts.material)),
                 has_refresh_token: facts.has_refresh_token,
                 access_token_expires_at,

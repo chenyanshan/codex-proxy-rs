@@ -39,14 +39,21 @@ async fn connection_update_requires_admin_and_validates_before_calling_the_servi
         "groupIds":[],
         "connection":{"baseUrl":"https://api.example.invalid/v1", "transport":"http"}
     });
-    for (authenticated, transport, expected) in [
-        (false, "http", StatusCode::UNAUTHORIZED),
-        (true, "invalid", StatusCode::BAD_REQUEST),
+    for (authenticated, transport, oauth, expected) in [
+        (false, "http", false, StatusCode::UNAUTHORIZED),
+        (true, "invalid", false, StatusCode::BAD_REQUEST),
         // 夹具没有凭据 Store，合法输入必须进入服务，不能按普通设置静默保存。
-        (true, "http", StatusCode::SERVICE_UNAVAILABLE),
+        (true, "http", false, StatusCode::SERVICE_UNAVAILABLE),
+        (true, "http", true, StatusCode::SERVICE_UNAVAILABLE),
     ] {
         let mut input = input.clone();
         input["connection"]["transport"] = serde_json::json!(transport);
+        if oauth {
+            input["connection"]
+                .as_object_mut()
+                .unwrap()
+                .remove("baseUrl");
+        }
         let mut request = Request::builder()
             .method("POST")
             .uri("/api/admin/accounts/update")

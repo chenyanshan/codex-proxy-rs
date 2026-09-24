@@ -704,15 +704,14 @@ impl CodexProvider {
             );
         }
         let requirement = transport_requirement(&upstream_request);
-        let api_http = matches!(lease.authentication(), crate::credential::CodexRuntimeAuthentication::ApiKey(auth)
-            if auth.configuration.transport == crate::credential::ApiKeyTransport::Http);
-        if api_http && requirement.requires_websocket() {
+        let http_only = lease.transport() == crate::credential::ResponsesTransport::Http;
+        if http_only && requirement.requires_websocket() {
             return Err(provider_error(
                 ProviderErrorKind::Unsupported,
                 UpstreamSendState::NotSent,
             ));
         }
-        let requested_transport = if api_http {
+        let requested_transport = if http_only {
             CodexProviderTransport::HttpOnly
         } else {
             selected_transport(&upstream_request)

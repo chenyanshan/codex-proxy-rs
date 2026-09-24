@@ -2294,7 +2294,7 @@ async fn api_key_admin_exposes_only_configuration_and_preserves_key_when_rotatin
         .seed_api_key(
             "acct_api_admin",
             "https://first.example/v1".to_owned(),
-            provider_openai::credential::ApiKeyTransport::Http,
+            provider_openai::credential::ResponsesTransport::Http,
         )
         .await;
     let account = store.account("acct_api_admin").unwrap();
@@ -2405,4 +2405,100 @@ async fn browser_authorization_declares_callback_and_rejects_extra_login_inputs(
         .unwrap_err();
     assert_eq!(error.kind(), ProviderAdminErrorKind::Invalid);
     assert!(!format!("{error:?}").contains("unexpected-fixture-secret"));
+}
+
+#[tokio::test]
+async fn oauth_transport_settings_preserve_tokens_refresh_schedule_and_health() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_oauth_transport".to_owned(),
+            name: "OAuth transport".to_owned(),
+            secret: secret("test-oauth-transport"),
+            verified_account: profile("chatgpt-oauth-transport"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let account = store.account("acct_oauth_transport").unwrap();
+    let current = store.load_current_credential(account.id()).await.unwrap();
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    let admin = bundle.admin_provider();
+    let configuration = admin
+        .account_configuration(account.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        configuration.expose_to_provider().expose_to_provider(),
+        json!({"transport":"prefer_websocket"}).as_object().unwrap()
+    );
+    for transport in ["http", "prefer_websocket"] {
+        let prepared = admin
+            .prepare_rotation(PrepareCredentialRotation {
+                account: account_record(&account),
+                provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                    json!({"transport":transport}).as_object().unwrap().clone(),
+                )),
+            })
+            .await
+            .unwrap();
+        let facts = prepared.facts();
+        let mut expected = current.credential.expose_to_provider().clone();
+        if transport == "http" {
+            expected.insert("transport".to_owned(), json!(transport));
+        }
+        assert_eq!(
+            facts
+                .provider_material
+                .expose_to_provider()
+                .expose_to_provider(),
+            &expected
+        );
+        assert_eq!(
+            facts.next_refresh_at,
+            account.next_refresh_at().map(DateTime::<Utc>::from)
+        );
+        assert_eq!(
+            facts.access_token_expires_at,
+            account.access_token_expires_at().map(DateTime::<Utc>::from)
+        );
+        assert_eq!(facts.has_refresh_token, account.has_refresh_token());
+        assert!(facts.preserve_profile && facts.preserve_credential_state);
+    }
+    for invalid in [
+        json!({"transport":"invalid"}),
+        json!({"transport":"http", "base_url":"https://other.example"}),
+        json!({"transport":"http", "api_key":"test-key"}),
+    ] {
+        let error = admin
+            .prepare_rotation(PrepareCredentialRotation {
+                account: account_record(&account),
+                provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                    invalid.as_object().unwrap().clone(),
+                )),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ProviderAdminErrorKind::Invalid);
+    }
+    store.set_oauth_transport(
+        "acct_oauth_transport",
+        provider_openai::credential::ResponsesTransport::Http,
+    );
+    let configuration = admin
+        .account_configuration(account.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        configuration.expose_to_provider().expose_to_provider(),
+        json!({"transport":"http"}).as_object().unwrap()
+    );
 }

@@ -172,6 +172,7 @@ const {
 
 const {
   apiKey: editingApiKey,
+  oauthTransport: editingOAuthTransport,
   configurationLoading,
   configurationReady,
   showEditModal,
@@ -424,6 +425,7 @@ const {
     <AccountEditModal
       v-model="showEditModal"
       v-model:api-key="editingApiKey"
+      v-model:oauth-transport="editingOAuthTransport"
       v-model:notes="editingNotes"
       v-model:enabled="schedulingEnabled"
       v-model:concurrency-limit="editingConcurrencyLimit"

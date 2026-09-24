@@ -834,16 +834,16 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              upstream_user_id = case when $11::boolean then $12::text else upstream_user_id end,
              upstream_account_id = case when $11::boolean then $13::text else upstream_account_id end,
              credential_state = case
-                 when not enabled then credential_state
+                 when $15::boolean or not enabled then credential_state
                  when $11::boolean or credential_state <> 'unknown' then 'ready'
                  else 'unknown'
              end,
              credential_observed_at = case
-                 when not enabled then credential_observed_at
+                 when $15::boolean or not enabled then credential_observed_at
                  else now()
              end,
-             last_error_reason = case when enabled then null else last_error_reason end,
-             last_error_message = case when enabled then null else last_error_message end,
+             last_error_reason = case when enabled and not $15::boolean then null else last_error_reason end,
+             last_error_message = case when enabled and not $15::boolean then null else last_error_message end,
              updated_at = greatest(now(), updated_at)
          where id = $1 and provider_kind = $2
            and credential_revision = $3
@@ -863,6 +863,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     .bind(upstream_user_id)
     .bind(upstream_account_id)
     .bind(update.preserve_profile)
+    .bind(update.preserve_credential_state)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {

@@ -1060,6 +1060,7 @@ pub(super) fn prepare_rotation(
             access_token_expires_at: prepared.access_token_expires_at,
             next_refresh_at: prepared.next_refresh_at,
             preserve_profile: prepared.preserve_profile,
+            preserve_credential_state: prepared.preserve_credential_state,
         },
         audit: mutation_audit(
             context,

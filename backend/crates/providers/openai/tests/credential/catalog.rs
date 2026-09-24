@@ -783,17 +783,17 @@ fn invalid_response_etag_is_rejected_without_touching_the_catalog() {
 
 #[tokio::test]
 async fn api_key_catalogs_are_isolated_and_join_oauth_without_claiming_native_metadata() {
-    use provider_openai::credential::{ApiKeyTransport, CodexCatalogScope};
+    use provider_openai::credential::{CodexCatalogScope, ResponsesTransport};
     let oauth = MockServer::start().await;
     let first = MockServer::start().await;
     let second = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     let oauth_account = seed_account(&store, "acct_oauth").await;
     store
-        .seed_api_key("acct_first", first.uri(), ApiKeyTransport::Http)
+        .seed_api_key("acct_first", first.uri(), ResponsesTransport::Http)
         .await;
     store
-        .seed_api_key("acct_second", second.uri(), ApiKeyTransport::Http)
+        .seed_api_key("acct_second", second.uri(), ResponsesTransport::Http)
         .await;
     let a = store.account("acct_first").unwrap();
     let b = store.account("acct_second").unwrap();
@@ -872,13 +872,13 @@ async fn api_key_catalogs_are_isolated_and_join_oauth_without_claiming_native_me
 #[tokio::test]
 async fn api_key_client_catalog_negotiates_and_preserves_versioned_native_objects() {
     use gateway_core::routing::ProviderModelContent;
-    use provider_openai::credential::ApiKeyTransport;
+    use provider_openai::credential::ResponsesTransport;
     use serde_json::json;
 
     let upstream = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .seed_api_key("acct_api", upstream.uri(), ApiKeyTransport::Http)
+        .seed_api_key("acct_api", upstream.uri(), ResponsesTransport::Http)
         .await;
     let account = store.account("acct_api").expect("API account");
     // 先填满普通 ID 目录，确保客户端不会把已有套餐缓存误当成原生元数据。
@@ -960,14 +960,14 @@ async fn api_key_client_catalog_negotiates_and_preserves_versioned_native_object
 #[tokio::test]
 async fn api_key_native_catalog_preserves_unknown_reasoning_and_background_entitlements() {
     use gateway_core::routing::ProviderModelContent;
-    use provider_openai::credential::ApiKeyTransport;
+    use provider_openai::credential::ResponsesTransport;
     use provider_openai::transport::CodexCatalogCapabilityEvidence;
     use serde_json::json;
 
     let upstream = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .seed_api_key("acct_api", upstream.uri(), ApiKeyTransport::Http)
+        .seed_api_key("acct_api", upstream.uri(), ResponsesTransport::Http)
         .await;
     let original = json!({"slug":"z-unknown-reasoning", "display_name":"Unknown reasoning"});
     let second = json!({"slug":"vendor/model", "display_name":"Second upstream model"});
@@ -1017,7 +1017,7 @@ async fn api_key_native_catalog_preserves_unknown_reasoning_and_background_entit
 #[tokio::test]
 async fn api_key_client_catalog_keeps_native_sources_stable_and_account_scoped() {
     use gateway_core::routing::ProviderModelContent;
-    use provider_openai::credential::ApiKeyTransport;
+    use provider_openai::credential::ResponsesTransport;
     use serde_json::json;
 
     let upstream = MockServer::start().await;
@@ -1040,7 +1040,7 @@ async fn api_key_client_catalog_keeps_native_sources_stable_and_account_scoped()
             .seed_api_key(
                 id,
                 format!("{}/{id}", upstream.uri()),
-                ApiKeyTransport::Http,
+                ResponsesTransport::Http,
             )
             .await;
         accounts.push(store.account(id).unwrap());
@@ -1078,12 +1078,12 @@ async fn api_key_client_catalog_keeps_native_sources_stable_and_account_scoped()
 #[tokio::test]
 async fn api_key_client_catalog_cache_is_invalidated_by_credential_revision() {
     use gateway_core::account::{CredentialCasOutcome, CredentialCasUpdate, ProviderAccountUpdate};
-    use provider_openai::credential::ApiKeyTransport;
+    use provider_openai::credential::ResponsesTransport;
 
     let upstream = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .seed_api_key("acct_api", upstream.uri(), ApiKeyTransport::Http)
+        .seed_api_key("acct_api", upstream.uri(), ResponsesTransport::Http)
         .await;
     let account = store.account("acct_api").unwrap();
     let scope = client_scope(std::slice::from_ref(&account));
@@ -1134,13 +1134,13 @@ async fn api_key_client_catalog_cache_is_invalidated_by_credential_revision() {
 
 #[tokio::test]
 async fn api_key_catalog_accepts_namespaced_model_ids_without_inventing_capabilities() {
-    use provider_openai::credential::ApiKeyTransport;
+    use provider_openai::credential::ResponsesTransport;
     use provider_openai::transport::CodexCatalogCapabilityEvidence;
 
     let upstream = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .seed_api_key("acct_api", upstream.uri(), ApiKeyTransport::Http)
+        .seed_api_key("acct_api", upstream.uri(), ResponsesTransport::Http)
         .await;
     let ids = [
         "gpt-5.4",
@@ -1195,12 +1195,12 @@ async fn api_key_catalog_accepts_namespaced_model_ids_without_inventing_capabili
 
 #[tokio::test]
 async fn api_key_catalog_rejects_invalid_ids_and_duplicates() {
-    use provider_openai::credential::ApiKeyTransport;
+    use provider_openai::credential::ResponsesTransport;
 
     let upstream = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     store
-        .seed_api_key("acct_api", upstream.uri(), ApiKeyTransport::Http)
+        .seed_api_key("acct_api", upstream.uri(), ResponsesTransport::Http)
         .await;
     let service = service_with_catalog_cache(&store, upstream.uri(), catalog_cache());
     for invalid in [
@@ -1230,7 +1230,7 @@ async fn api_key_catalog_rejects_invalid_ids_and_duplicates() {
 #[tokio::test]
 async fn api_key_catalog_does_not_replace_native_metadata_for_shared_models() {
     use gateway_core::routing::ProviderModelContent;
-    use provider_openai::credential::ApiKeyTransport;
+    use provider_openai::credential::ResponsesTransport;
 
     let oauth = MockServer::start().await;
     let upstream = MockServer::start().await;
@@ -1245,7 +1245,7 @@ async fn api_key_catalog_does_not_replace_native_metadata_for_shared_models() {
     let service = service_with_catalog_cache(&store, oauth.uri(), catalog_cache());
     let before = service.synchronize().await.expect("OAuth directory");
     store
-        .seed_api_key("acct_api", upstream.uri(), ApiKeyTransport::Http)
+        .seed_api_key("acct_api", upstream.uri(), ResponsesTransport::Http)
         .await;
     Mock::given(method("GET"))
         .and(path("/models"))
@@ -1298,7 +1298,7 @@ async fn api_key_catalog_does_not_replace_native_metadata_for_shared_models() {
 
 #[tokio::test]
 async fn slow_api_key_catalogs_share_a_deadline_and_preserve_healthy_catalogs() {
-    use provider_openai::credential::ApiKeyTransport;
+    use provider_openai::credential::ResponsesTransport;
     use std::time::Duration;
 
     let upstream = MockServer::start().await;
@@ -1332,7 +1332,7 @@ async fn slow_api_key_catalogs_share_a_deadline_and_preserve_healthy_catalogs() 
         .seed_api_key(
             "acct_fast",
             format!("{}/fast", upstream.uri()),
-            ApiKeyTransport::Http,
+            ResponsesTransport::Http,
         )
         .await;
     accounts.push(store.account("acct_fast").expect("fast API account"));
@@ -1342,7 +1342,7 @@ async fn slow_api_key_catalogs_share_a_deadline_and_preserve_healthy_catalogs() 
             .seed_api_key(
                 &id,
                 format!("{}/slow", upstream.uri()),
-                ApiKeyTransport::Http,
+                ResponsesTransport::Http,
             )
             .await;
         accounts.push(store.account(&id).expect("slow API account"));

@@ -473,7 +473,7 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `POST` | `/api/admin/accounts/import-tasks/stop` | `{ taskId }` | 跳过未开始的条目，已开始的条目继续完成 |
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 停用账号只启用调度；已启用账号强制清除本地错误/额度/cooldown 事实，不访问上游 |
-| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl?, connection? }` | 一次更新账号设置；`connection` 仅用于编辑 OpenAI API Key 账号的连接地址、传输方式和密钥，见下文 |
+| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl?, connection? }` | 一次更新账号设置；`connection` 用于编辑 OpenAI 账号的传输方式，以及 API Key 账号的连接地址和密钥，见下文 |
 | `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled?, concurrencyLimit?, weight?, groupIds?, modelAccess?, outboundProxyId?, outboundProxyUrl? }` | 一次事务更新所选账号；仅修改提供的字段，至少提供一项修改 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游；Provider 未提供额度能力时返回空额度投影 |
@@ -797,14 +797,21 @@ sub2api 的 `credentials.model_mapping` 不转换为本项目的账号模型限�
 ```
 
 `connection.transport` 支持 `http`、`prefer_websocket`。省略 `connection` 时只更新账号设置；
-省略 `connection.apiKey` 保留当前密钥，空字符串无效。连接设置只适用于现有 OpenAI API Key 账号，
+省略 `connection.apiKey` 保留当前密钥，空字符串无效。API Key 账号必须提供 `connection.baseUrl`，
 不能修改账号 ID、Provider 或认证类型，也不接受 OAuth token 或通用凭据文档。
 凭据与设置在同一事务中保存，任一校验或持久化失败均不落库。
+OpenAI OAuth 账号仅提交 `connection: { "transport": "http" }` 或
+`connection: { "transport": "prefer_websocket" }`，不接受 `baseUrl` 或 `apiKey`。
+OAuth 缺省使用 WS 优先；`http` 强制 Responses 请求走 HTTP/SSE，包括客户端使用 WebSocket 的普通生成请求。
+必须使用 WebSocket 的预热或连接内续写不会改用 HTTP 重放，按既有续写恢复规则处理。
+设置保留令牌、刷新计划及凭据健康状态，刷新令牌和重新授权不重置该选择。
+账号详情对 OAuth 返回 `credentialConfiguration: { transport }`。回退到不支持此设置的旧版本前，先恢复 OAuth 账号的 WS 优先。
+
 `GET /api/admin/accounts/detail` 对 API Key 账号额外返回 `credentialConfiguration: { base_url, transport }`；
 声明连接设置能力的插件 Provider 可返回其 rotate schema 中明确公开的标量字段。字段投影
 不超过 64 KiB，不接受引用、组合或条件 schema，不回显密钥、`writeOnly` 字段、
 原始插件配置或 secret。不适用的账号省略该字段。
-更新会推进凭据 revision 并失效目录与连接；旧版本会话不可静默续接到新上游。
+更新会推进凭据 revision 并失效目录；API Key 的连接与续写按凭据版本隔离，旧版本会话不可静默续接到新上游。
 
 OAuth start 使用：
 
