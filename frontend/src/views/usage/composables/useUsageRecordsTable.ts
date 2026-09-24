@@ -141,6 +141,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     const diagnosticsId = ++diagnosticRequestId
     analyticsController?.abort()
     diagnosticController?.abort()
+    diagnosticLoading.value = false
     analyticsController = new AbortController()
     const requestOptions = { signal: analyticsController.signal }
     const dimension = diagnosticDimension.value
