@@ -44,6 +44,8 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   let tableParams = snapshot()
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
+  const diagnosticPage = shallowRef(1)
+  const diagnosticLoading = shallowRef(false)
   let tableRequestId = 0
   let analyticsRequestId = 0
   let diagnosticRequestId = 0
@@ -79,6 +81,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     const globalParams = scopedParams()
     if (scope === 'all') {
       resetPagination()
+      diagnosticPage.value = 1
       tableParams = snapshot()
     }
 
@@ -141,6 +144,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     analyticsController = new AbortController()
     const requestOptions = { signal: analyticsController.signal }
     const dimension = diagnosticDimension.value
+    const page = diagnosticPage.value
     analyticsLoading.value = !background
     try {
       const [nextSummary, overview, diagnostics] = await Promise.all([
@@ -149,6 +153,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
         getUsageRecordInsightsDiagnostics({
           ...globalParams,
           dimension,
+          ...(dimension === 'keyModel' ? { currentPage: page, pageSize: 20 } : {}),
         }, requestOptions),
       ])
       if (requestId !== analyticsRequestId)
@@ -163,7 +168,10 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
             : insights.value.diagnostics,
       }
     }
-    catch {}
+    catch {
+      if (requestId === analyticsRequestId && diagnosticsId === diagnosticRequestId)
+        diagnosticPage.value = insights.value.diagnostics.dimension === dimension ? insights.value.diagnostics.currentPage : 1
+    }
     finally {
       if (requestId === analyticsRequestId) {
         analyticsLoading.value = false
@@ -176,11 +184,14 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     diagnosticController?.abort()
     diagnosticController = new AbortController()
     const dimension = diagnosticDimension.value
+    const page = diagnosticPage.value
     const params = scopedParams()
+    diagnosticLoading.value = true
     try {
       const diagnostics = await getUsageRecordInsightsDiagnostics({
         ...params,
         dimension,
+        ...(dimension === 'keyModel' ? { currentPage: page, pageSize: 20 } : {}),
       }, { signal: diagnosticController.signal })
       if (requestId !== diagnosticRequestId || dimension !== diagnosticDimension.value)
         return
@@ -188,8 +199,23 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
         ...insights.value,
         diagnostics,
       }
+      diagnosticPage.value = diagnostics.currentPage
     }
-    catch {}
+    catch {
+      if (requestId === diagnosticRequestId)
+        diagnosticPage.value = insights.value.diagnostics.dimension === dimension ? insights.value.diagnostics.currentPage : 1
+    }
+    finally {
+      if (requestId === diagnosticRequestId)
+        diagnosticLoading.value = false
+    }
+  }
+
+  function handleDiagnosticPageChange(page: number) {
+    if (page < 1 || (page > diagnosticPage.value && !insights.value.diagnostics.hasMore))
+      return
+    diagnosticPage.value = page
+    void loadDiagnostics()
   }
 
   async function refreshUsageRecords() {
@@ -234,6 +260,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   })
 
   watch(diagnosticDimension, () => {
+    diagnosticPage.value = 1
     void loadDiagnostics()
   })
 
@@ -287,10 +314,12 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     insights,
     refreshingList,
     diagnosticDimension,
+    diagnosticLoading,
     loadUsageRecords,
     refreshUsageRecords,
     handlePageChange,
     handlePageSizeChange,
+    handleDiagnosticPageChange,
   }
 }
 
@@ -379,6 +408,9 @@ function emptyDiagnostics() {
   const diagnostics: Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>> = {
     dimension: 'model',
     items: [],
+    currentPage: 1,
+    pageSize: 100,
+    hasMore: false,
   }
   return diagnostics
 }

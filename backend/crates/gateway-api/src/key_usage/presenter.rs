@@ -55,6 +55,7 @@ pub(super) struct OverviewView {
     key: KeyView,
     summary: MetricsView,
     models: Vec<ModelUsageView>,
+    models_pagination: ModelsPaginationView,
     trend: Vec<TrendPointView>,
     health_timeline: HealthTimelineView,
 }
@@ -98,6 +99,14 @@ struct ModelUsageView {
     cost_incomplete: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelsPaginationView {
+    current_page: u32,
+    page_size: u16,
+    has_more: bool,
+}
+
 fn metrics(value: &RequestMetrics, costs: &[CurrencyCost], coverage: &CostCoverage) -> MetricsView {
     MetricsView {
         requests: value.request_count,
@@ -127,6 +136,11 @@ struct TrendPointView {
 
 pub(super) fn overview(value: KeyUsageOverview) -> OverviewView {
     let key = value.key;
+    let models_pagination = ModelsPaginationView {
+        current_page: value.models.current_page,
+        page_size: value.models.page_size,
+        has_more: value.models.has_more,
+    };
     OverviewView {
         as_of: Utc::now(),
         start_time: value.overview.range.start,
@@ -150,6 +164,7 @@ pub(super) fn overview(value: KeyUsageOverview) -> OverviewView {
         ),
         models: value
             .models
+            .items
             .into_iter()
             .map(|model| ModelUsageView {
                 model: model.name,
@@ -164,6 +179,7 @@ pub(super) fn overview(value: KeyUsageOverview) -> OverviewView {
                     || model.cost_coverage.unavailable_count > 0,
             })
             .collect(),
+        models_pagination,
         trend: value
             .trend
             .into_iter()

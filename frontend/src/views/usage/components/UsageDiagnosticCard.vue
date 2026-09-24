@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { getUsageRecordInsightsDiagnostics } from '@/api'
-import { BaseCard, BaseEmpty, BaseSegmented, BaseTable, defineTableColumns } from '@codex-proxy/ui'
+import { BaseButton, BaseCard, BaseEmpty, BaseSegmented, BaseTable, defineTableColumns } from '@codex-proxy/ui'
 
 import { CornerDownRight } from '@lucide/vue'
 import { computed } from 'vue'
@@ -20,8 +20,8 @@ const props = withDefaults(
   },
 )
 
+defineEmits<{ pageChange: [page: number] }>()
 const dimension = defineModel('dimension', { type: String, required: true })
-
 const dimensionOptions = [
   { label: '模型', value: 'model' },
   { label: '密钥×模型', value: 'keyModel' },
@@ -107,7 +107,8 @@ function diagnosticNameDisplay(name: string) {
   const raw = name.trim() || '未知'
   const full
     = resultDimension.value === 'transport' ? ({ websocket: 'WS', http_sse: 'SSE' }[raw] ?? raw) : raw
-  if (resultDimension.value !== 'model' && resultDimension.value !== 'account' && resultDimension.value !== 'keyModel') {
+  // Key 名称可能包含箭头；组合名称由服务端完整展示，不能按字符猜测字段边界。
+  if (resultDimension.value !== 'model' && resultDimension.value !== 'account') {
     return { primary: full, secondary: '', full }
   }
 
@@ -141,7 +142,7 @@ function diagnosticNameDisplay(name: string) {
       <BaseTable
         v-if="hasData"
         :key="resultDimension"
-        class="min-h-0 w-full xl:contain-[size]"
+        class="min-h-0 w-full flex-1 xl:contain-[size]"
         :columns="visibleColumns"
         :rows="displayItems"
         density="compact"
@@ -155,7 +156,8 @@ function diagnosticNameDisplay(name: string) {
         <template #nameDisplay="{ row }">
           <div class="inline-grid max-w-full min-w-0 gap-1" :title="row.nameDisplay.full">
             <code
-              class="block max-w-full truncate font-mono text-cp-sm leading-none font-heavy text-cp-text"
+              class="block max-w-full font-mono text-cp-sm leading-none font-heavy text-cp-text"
+              :class="resultDimension === 'keyModel' ? 'whitespace-normal break-all' : 'truncate'"
             >
               {{ row.nameDisplay.primary }}
             </code>
@@ -256,6 +258,15 @@ function diagnosticNameDisplay(name: string) {
         description="当前范围没有可诊断的请求记录"
         class="h-full place-content-center"
       />
+      <div v-if="resultDimension === 'keyModel' && (diagnostics.currentPage > 1 || diagnostics.hasMore)" class="flex shrink-0 items-center justify-end gap-2 text-cp-sm text-cp-text-secondary">
+        <span>第 {{ diagnostics.currentPage }} 页</span>
+        <BaseButton variant="soft" size="sm" :disabled="loading || diagnostics.currentPage <= 1" @click="$emit('pageChange', diagnostics.currentPage - 1)">
+          上一页
+        </BaseButton>
+        <BaseButton variant="soft" size="sm" :disabled="loading || !diagnostics.hasMore" @click="$emit('pageChange', diagnostics.currentPage + 1)">
+          下一页
+        </BaseButton>
+      </div>
     </template>
   </BaseCard>
 </template>

@@ -18,7 +18,7 @@ import { useKeyConfig } from './composables/useKeyConfig'
 import { useKeyUsage } from './composables/useKeyUsage'
 import { keyUsageTime } from './utils/format'
 
-const { period, model, kind, refreshInterval, overview, overviewLoading, overviewError, refreshing, recordsStale, records, refresh, changePageSize, changePage } = useKeyUsage()
+const { period, model, kind, refreshInterval, overview, overviewLoading, overviewError, refreshing, recordsStale, records, refresh, changePageSize, changePage, changeModelsPage } = useKeyUsage()
 const { items, currentPage, pageSize, total, loading: recordsLoading, error: recordsError } = records
 const { showConfig, configKey, configuring, apiBaseUrl, openConfig, copyConfig } = useKeyConfig()
 const aboutOpen = shallowRef(false)
@@ -63,7 +63,7 @@ async function openAbout() {
         </p>
         <template v-if="overview">
           <KeyUsageSummary :summary="overview.summary" />
-          <KeyUsageModels :models="overview.models" />
+          <KeyUsageModels :models="overview.models" :pagination="overview.modelsPagination" :loading="overviewLoading" @page-change="changeModelsPage" />
           <div class="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(400px,1fr)]">
             <KeyUsageTrend class="min-w-0" :points="overview.trend" />
             <KeyUsageBudget :budget="overview.key" />

@@ -771,6 +771,9 @@ pub struct DiagnosticItemView {
 pub struct DiagnosticsView {
     pub dimension: String,
     pub items: Vec<DiagnosticItemView>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub has_more: bool,
 }
 
 /// 运维错误项目。

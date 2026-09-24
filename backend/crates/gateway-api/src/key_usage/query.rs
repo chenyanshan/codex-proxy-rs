@@ -4,8 +4,8 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Duration};
 use gateway_admin::model::{
     PageSize,
-    key_usage::{KeyUsageQuery, KeyUsageRecordKind, KeyUsageRecordsQuery},
-    observability::TimeRange,
+    key_usage::{KeyUsageOverviewQuery, KeyUsageQuery, KeyUsageRecordKind, KeyUsageRecordsQuery},
+    observability::{DiagnosticPageQuery, TimeRange},
 };
 use serde::Deserialize;
 
@@ -21,9 +21,31 @@ pub(super) struct OverviewQuery {
     start_time: String,
     end_time: String,
     model: Option<String>,
+    current_page: Option<u32>,
+    page_size: Option<u16>,
 }
 
 impl OverviewQuery {
+    pub(super) fn into_overview_domain(self) -> Result<KeyUsageOverviewQuery, AdminError> {
+        let current_page = self.current_page.unwrap_or(1);
+        let page_size = self.page_size.unwrap_or(20);
+        if current_page == 0 || !(1..=100).contains(&page_size) {
+            return Err(AdminError::invalid_request(
+                StatusCode::BAD_REQUEST,
+                "页码必须大于 0，每页数量为 1–100",
+            ));
+        }
+        Ok(KeyUsageOverviewQuery {
+            usage: self.into_domain()?,
+            models_page: DiagnosticPageQuery {
+                current_page,
+                page_size: PageSize::new(page_size).map_err(|_| {
+                    AdminError::invalid_request(StatusCode::BAD_REQUEST, "每页数量不合法")
+                })?,
+            },
+        })
+    }
+
     pub(super) fn into_domain(self) -> Result<KeyUsageQuery, AdminError> {
         let parse = |value: &str| {
             DateTime::parse_from_rfc3339(value)
@@ -95,6 +117,8 @@ impl RecordsQuery {
                 start_time: self.start_time,
                 end_time: self.end_time,
                 model: self.model,
+                current_page: None,
+                page_size: None,
             }
             .into_domain()?,
             kind: match self.kind {

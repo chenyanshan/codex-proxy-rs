@@ -50,6 +50,7 @@ export interface KeyUsageOverview {
   key: KeyUsageBudget
   summary: KeyUsageMetrics
   models: KeyUsageModel[]
+  modelsPagination: { currentPage: number, pageSize: number, hasMore: boolean }
   trend: KeyUsageTrendPoint[]
   healthTimeline: DashboardHealthTimeline
 }
@@ -94,6 +95,8 @@ export interface KeyUsageQuery {
   startTime: string
   endTime: string
   model?: string
+  currentPage?: number
+  pageSize?: number
 }
 
 export function getKeyUsageOverview(params: KeyUsageQuery, options: RequestOptions = {}) {

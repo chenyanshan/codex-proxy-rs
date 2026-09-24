@@ -88,7 +88,7 @@ where
         .key_usage()
         .overview(
             session_cookie::value(&headers).as_deref(),
-            query.into_domain()?,
+            query.into_overview_domain()?,
         )
         .await
         .map_err(map_admin_service_error)?

@@ -14,11 +14,15 @@ withDefaults(
     overview: Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>
     diagnostics: Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
     loading?: boolean
+    diagnosticsLoading?: boolean
   }>(),
   {
     loading: false,
+    diagnosticsLoading: false,
   },
 )
+
+defineEmits<{ diagnosticPageChange: [page: number] }>()
 
 const diagnosticDimension = defineModel('diagnosticDimension', {
   type: String,
@@ -40,7 +44,8 @@ const diagnosticDimension = defineModel('diagnosticDimension', {
     <UsageDiagnosticCard
       v-model:dimension="diagnosticDimension"
       :diagnostics="diagnostics"
-      :loading="loading"
+      :loading="loading || diagnosticsLoading"
+      @page-change="$emit('diagnosticPageChange', $event)"
     />
 
     <UsagePerformanceCard

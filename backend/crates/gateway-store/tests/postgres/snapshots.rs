@@ -1,8 +1,8 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use gateway_store::postgres::{
-    DiagnosticDimension, ModelRequestAttemptStart, ModelRequestRepository, NewModelRequest,
-    ObservabilityPageSize, ObservabilityRange, ObservabilityRepository, OpsErrorFilter,
-    OpsErrorQuery, OpsEvent, OpsEventLevel, OpsEventRepository, PgExecutionStore,
+    DiagnosticDimension, DiagnosticPageQuery, ModelRequestAttemptStart, ModelRequestRepository,
+    NewModelRequest, ObservabilityPageSize, ObservabilityRange, ObservabilityRepository,
+    OpsErrorFilter, OpsErrorQuery, OpsEvent, OpsEventLevel, OpsEventRepository, PgExecutionStore,
     PgOpsEventRepository, ProviderAccountUsageQuery, UsageRecordFilter, UsageRecordQuery,
 };
 use sqlx::PgPool;
@@ -109,17 +109,18 @@ async fn completed_usage_projections_should_accept_statusless_websocket_but_reje
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
         .expect("load statusless usage diagnostics");
     assert_eq!(
         (
-            diagnostics[0].request_count,
-            diagnostics[0].success_count,
-            diagnostics[0].total_tokens,
-            diagnostics[0].average_latency_ms,
-            diagnostics[0].cost_coverage.provider_reported_count,
-            diagnostics[0].costs[0].amount.as_str(),
+            diagnostics.items[0].request_count,
+            diagnostics.items[0].success_count,
+            diagnostics.items[0].total_tokens,
+            diagnostics.items[0].average_latency_ms,
+            diagnostics.items[0].cost_coverage.provider_reported_count,
+            diagnostics.items[0].costs[0].amount.as_str(),
         ),
         (2, 2, 10, Some(500), 1, "1.25"),
     );
@@ -513,12 +514,14 @@ async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
         .expect("account diagnostics");
-    assert_eq!(diagnostics.len(), 2);
+    assert_eq!(diagnostics.items.len(), 2);
     assert_eq!(
         diagnostics
+            .items
             .iter()
             .map(|item| item.key.as_str())
             .collect::<Vec<_>>(),
@@ -526,10 +529,11 @@ async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
     );
     assert!(
         diagnostics
+            .items
             .iter()
             .all(|item| item.name == "same@example.invalid")
     );
-    assert!(diagnostics.iter().all(|item| item.request_count == 1));
+    assert!(diagnostics.items.iter().all(|item| item.request_count == 1));
 
     database.close().await;
 }
@@ -585,10 +589,12 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
         .expect("account diagnostics");
     let by_key = diagnostics
+        .items
         .iter()
         .map(|item| (item.key.as_str(), item.name.as_str()))
         .collect::<std::collections::HashMap<_, _>>();
@@ -650,14 +656,15 @@ async fn diagnostics_should_prefer_the_latest_non_null_email_snapshot() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
         .expect("account diagnostics");
 
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0].key, "acct_snapshot_history");
-    assert_eq!(diagnostics[0].name, "history@example.invalid");
-    assert_eq!(diagnostics[0].request_count, 2);
+    assert_eq!(diagnostics.items.len(), 1);
+    assert_eq!(diagnostics.items[0].key, "acct_snapshot_history");
+    assert_eq!(diagnostics.items[0].name, "history@example.invalid");
+    assert_eq!(diagnostics.items[0].request_count, 2);
     database.close().await;
 }
 
@@ -711,14 +718,15 @@ async fn failure_diagnostics_should_only_include_errored_requests() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Failure,
+            None,
         )
         .await
         .expect("failure diagnostics");
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0].key, "rate_limited");
-    assert_eq!(diagnostics[0].request_count, 1);
-    assert_eq!(diagnostics[0].failure_count, 1);
-    assert_eq!(diagnostics[0].success_count, 0);
+    assert_eq!(diagnostics.items.len(), 1);
+    assert_eq!(diagnostics.items[0].key, "rate_limited");
+    assert_eq!(diagnostics.items[0].request_count, 1);
+    assert_eq!(diagnostics.items[0].failure_count, 1);
+    assert_eq!(diagnostics.items[0].success_count, 0);
 
     database.close().await;
 }
@@ -775,13 +783,14 @@ async fn model_diagnostics_should_exclude_provider_endpoints_without_a_model() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Model,
+            None,
         )
         .await
         .expect("model diagnostics");
 
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0].key, "upstream-model");
-    assert_eq!(diagnostics[0].request_count, 1);
+    assert_eq!(diagnostics.items.len(), 1);
+    assert_eq!(diagnostics.items[0].key, "upstream-model");
+    assert_eq!(diagnostics.items[0].request_count, 1);
 
     database.close().await;
 }
@@ -844,7 +853,7 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
         return;
     };
     let started_at = Utc::now();
-    seed_api_key(&database.pool, "key_diag", "My Key", started_at).await;
+    seed_api_key(&database.pool, "key_diag", "My Key → East", started_at).await;
     let store = PgExecutionStore::new(database.pool.clone());
     for id in ["req_key_a", "req_key_b"] {
         let upstream_model = if id == "req_key_a" {
@@ -889,25 +898,28 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::ApiKey,
+            None,
         )
         .await
         .expect("api key diagnostics");
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0].key, "key_diag");
-    assert_eq!(diagnostics[0].name, "My Key");
-    assert_eq!(diagnostics[0].request_count, 2);
-    assert_eq!(diagnostics[0].latency_p95_ms, Some(1950));
+    assert_eq!(diagnostics.items.len(), 1);
+    assert_eq!(diagnostics.items[0].key, "key_diag");
+    assert_eq!(diagnostics.items[0].name, "My Key → East");
+    assert_eq!(diagnostics.items[0].request_count, 2);
+    assert_eq!(diagnostics.items[0].latency_p95_ms, Some(1950));
 
     let key_models = repository
         .usage_diagnostics(
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::KeyModel,
+            None,
         )
         .await
         .expect("key/model diagnostics");
-    assert_eq!(key_models.len(), 2);
+    assert_eq!(key_models.items.len(), 2);
     let names = key_models
+        .items
         .iter()
         .map(|item| {
             let (key, model): (String, String) = serde_json::from_str(&item.key).unwrap();
@@ -916,8 +928,37 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             (model, item.name.clone())
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(names["upstream-model"], "My Key → upstream-model");
-    assert_eq!(names["other-model"], "My Key → other-model");
+    assert_eq!(names["upstream-model"], "My Key → East → upstream-model");
+    assert_eq!(names["other-model"], "My Key → East → other-model");
+
+    let pages = futures::future::try_join_all((1..=3).map(|current_page| {
+        repository.usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter {
+                client_api_key_ref: Some("key_diag".to_owned()),
+                ..UsageRecordFilter::default()
+            },
+            DiagnosticDimension::Model,
+            Some(DiagnosticPageQuery {
+                current_page,
+                page_size: 1,
+            }),
+        )
+    }))
+    .await
+    .expect("key model pages");
+    assert_eq!(
+        pages
+            .iter()
+            .map(|page| page.items.len())
+            .collect::<Vec<_>>(),
+        vec![1, 1, 0]
+    );
+    assert_eq!(
+        pages.iter().map(|page| page.has_more).collect::<Vec<_>>(),
+        vec![true, false, false]
+    );
+    assert_ne!(pages[0].items[0].key, pages[1].items[0].key);
 
     sqlx::query("delete from client_api_keys where id = 'key_diag'")
         .execute(&database.pool)
@@ -928,12 +969,13 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::ApiKey,
+            None,
         )
         .await
         .expect("api key diagnostics after deletion");
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0].key, "key_diag");
-    assert_eq!(diagnostics[0].name, "key_diag");
+    assert_eq!(diagnostics.items.len(), 1);
+    assert_eq!(diagnostics.items[0].key, "key_diag");
+    assert_eq!(diagnostics.items[0].name, "key_diag");
 
     seed_api_key(&database.pool, "key_other", "Other Key", started_at).await;
     let mut request = new_request("req_key_other", started_at);
@@ -964,12 +1006,14 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::KeyModel,
+            None,
         )
         .await
         .expect("key/model diagnostics for both keys");
-    assert_eq!(key_models.len(), 3);
+    assert_eq!(key_models.items.len(), 3);
     assert!(
         key_models
+            .items
             .iter()
             .any(|item| { item.name == "Other Key → upstream-model" && item.request_count == 1 })
     );

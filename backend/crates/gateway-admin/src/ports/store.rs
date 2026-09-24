@@ -26,9 +26,10 @@ use crate::model::{
         NewClientKey, ResetClientKeyBudget, SetClientKeyEnabled, UpdateClientKey,
     },
     observability::{
-        DashboardObservation, DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
-        OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageCalculatedBillingFact,
-        UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery,
+        DashboardObservation, DashboardRuntimeSlots, DiagnosticDimension,
+        DiagnosticObservationPage, DiagnosticPageQuery, OpsErrorPage, OpsErrorQuery,
+        RequestMetricPoint, TimeRange, UsageCalculatedBillingFact, UsageDetail, UsageFilter,
+        UsageOverview, UsagePage, UsageQuery,
     },
     provider_credentials::{
         AuthorizationCommit, CredentialDetails, CredentialImportCommit, CredentialImportResult,
@@ -437,7 +438,8 @@ pub trait ObservabilityStore: Send + Sync {
         range: TimeRange,
         filter: UsageFilter,
         dimension: DiagnosticDimension,
-    ) -> AdminStoreResult<Vec<DiagnosticObservation>>;
+        page: Option<DiagnosticPageQuery>,
+    ) -> AdminStoreResult<DiagnosticObservationPage>;
 
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage>;
 }
