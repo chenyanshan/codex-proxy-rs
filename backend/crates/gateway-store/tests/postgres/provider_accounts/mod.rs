@@ -4,7 +4,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+mod admin_adapter;
+mod authorization;
 mod quota_forecast;
+mod timestamps;
 
 use chrono::{TimeDelta, Utc};
 use gateway_admin::{
@@ -18,8 +21,8 @@ use gateway_admin::{
         observability::TimeRange,
         provider_credentials::{
             AuthorizationCommit, AuthorizationCredentialCommit, AuthorizationMutationTarget,
-            AuthorizationOwnerBinding, PendingAuthorizationMutation, PreparedCredentialCreate,
-            ProviderDocument,
+            AuthorizationOwnerBinding, PendingAuthorizationMutation, PluginAccountListQuery,
+            PreparedCredentialCreate, ProviderDocument,
         },
     },
     ports::store::AccountStore,
@@ -770,6 +773,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         .expect("sort accounts by retained usage");
     assert_eq!(usage_page.config_revision.get(), 1);
     assert_eq!(usage_page.total, 6);
+    assert_eq!(usage_page.providers, ["openai", "xai"]);
     assert_eq!(usage_page.summary.total, 6);
     assert_eq!(usage_page.summary.normal, 1);
     assert_eq!(usage_page.summary.quota_exhausted, 2);
@@ -837,6 +841,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         .expect("filter account directory");
     assert_eq!(filtered.total, 1);
     assert_eq!(filtered.summary, usage_page.summary);
+    assert_eq!(filtered.providers, usage_page.providers);
     assert_eq!(filtered.items[0].account.id, "acct_alpha");
     assert_eq!(filtered.items[0].account.provider_kind.as_str(), "openai");
 
@@ -1960,6 +1965,12 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
     let result = admin_account_store(&database.pool)
         .commit_authorization(
             AuthorizationCommit {
+                key: gateway_admin::model::provider_credentials::AuthorizationReceiptKey::new(
+                    provider_kind.clone(),
+                    "authorization-upsert",
+                    &context,
+                )
+                .unwrap(),
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
                     notes: Some("  OAuth 新建备注  ".to_owned()),
                     model_access: Default::default(),
@@ -1975,7 +1986,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
                     },
                     AuthorizationOwnerBinding::from_context(&context),
                 ),
-                credential: AuthorizationCredentialCommit::Create(PreparedCredentialCreate {
+                credential: AuthorizationCredentialCommit::Create(vec![PreparedCredentialCreate {
                     model_access: Default::default(),
                     outbound_proxy: None,
                     account_id: ProviderAccountId::new("acct_authorization_candidate")
@@ -1996,17 +2007,21 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
                     enabled: true,
                     credential_state: CredentialState::Ready,
                     credential_observed_at: Utc::now(),
-                }),
+                }]),
             },
             &context,
         )
         .await
         .expect("authorize existing identity");
 
+    let result = result.result;
+
     assert_eq!(
         (
-            result.account_id.as_str(),
-            result.credential_revision.map(|revision| revision.get()),
+            result.accounts[0].account_id.as_str(),
+            result.accounts[0]
+                .credential_revision
+                .map(|revision| revision.get()),
         ),
         ("acct_authorization_existing", Some(2)),
     );
@@ -3449,7 +3464,8 @@ async fn model_access_only_batch_update_preserves_other_settings_and_survives_re
 }
 
 #[tokio::test]
-async fn adaptive_concurrency_uses_latest_locked_settings_without_overwriting_admin_fields() {
+async fn adaptive_concurrency_handles_unlimited_and_latest_locked_settings_without_overwriting_admin_fields()
+ {
     let Some(database) = TestDatabase::create("adaptive_concurrency").await else {
         return;
     };
@@ -3470,6 +3486,9 @@ async fn adaptive_concurrency_uses_latest_locked_settings_without_overwriting_ad
         (true, Some(2), 10, Some(2), false),
         (true, None, 2, None, false),
         (true, None, 10, Some(3), true),
+        (true, None, 0, Some(3), true),
+        (true, Some(2), 0, Some(2), false),
+        (false, None, 0, None, false),
     ] {
         let mut admin = database.pool.begin().await.expect("admin transaction");
         sqlx::query("update runtime_settings set max_concurrent_per_account = $1 where id = 1")
@@ -3524,6 +3543,9 @@ async fn adaptive_concurrency_uses_latest_locked_settings_without_overwriting_ad
     .fetch_all(&database.pool)
     .await
     .expect("audit");
-    assert_eq!(audited_fields, vec![vec!["concurrency_limit".to_owned()]]);
+    assert_eq!(
+        audited_fields,
+        vec![vec!["concurrency_limit".to_owned()]; 2]
+    );
     database.close().await;
 }

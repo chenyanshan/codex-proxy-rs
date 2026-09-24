@@ -1,15 +1,10 @@
 <script setup lang="ts">
 import type { AccountRow } from '../../constants'
 import type { Account } from '@/api'
+import { BaseButton, BaseEmpty, BaseIconButton, BaseModal, BasePopover, BaseSegmented } from '@codex-proxy/ui'
 import { ChartNoAxesCombined, CircleAlert, RefreshCw } from '@lucide/vue'
-import { useNow } from '@vueuse/core'
+import { useIntervalFn, useNow } from '@vueuse/core'
 import { computed, ref, toRef, useId, watch } from 'vue'
-import BaseButton from '@/components/base/BaseButton.vue'
-import BaseEmpty from '@/components/base/BaseEmpty.vue'
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import BaseModal from '@/components/base/BaseModal/index.vue'
-import BasePopover from '@/components/base/BasePopover.vue'
-import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useAccountQuotaForecast } from '../../composables/useAccountQuotaForecast'
 import AccountIdentityCell from '../AccountIdentityCell.vue'
@@ -27,7 +22,10 @@ const { report, loading, refreshing, error, load, refresh } = useAccountQuotaFor
   open,
   account => emit('accountUpdated', account),
 )
-const { now, pause, resume } = useNow({ interval: 30_000, controls: true })
+const { now, pause, resume } = useNow({
+  controls: true,
+  scheduler: callback => useIntervalFn(callback, 30_000),
+})
 const options = computed(() => report.value?.forecasts.map(item => ({
   label: item.extrapolated ? `${item.targetDays}天折算` : item.source?.label ?? (item.period === 'weekly' ? '周额度' : '月额度'),
   value: item.period,

@@ -1,14 +1,8 @@
 <script setup lang="ts">
 import type { OutboundProxyRecord, OutboundProxyTest, RequestLocation } from '@/api'
+import { BaseButton, BaseForm, BaseFormItem, BaseIconButton, BaseInput, BaseModal, BaseSwitch } from '@codex-proxy/ui'
 import { Eye, EyeOff, Save, Wifi } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
-import BaseButton from '@/components/base/BaseButton.vue'
-import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
-import BaseForm from '@/components/base/BaseForm/index.vue'
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import BaseInput from '@/components/base/BaseInput.vue'
-import BaseModal from '@/components/base/BaseModal/index.vue'
-import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
 import { formatDateTime } from '@/utils/date'
 import { locationDetectionWarning } from '../utils/location'
@@ -29,11 +23,13 @@ const proxyUrl = defineModel<string>('proxyUrl', { required: true })
 const autoLocation = defineModel<boolean>('autoLocation', { required: true })
 const customLocation = defineModel<boolean>('customLocation', { required: true })
 const location = defineModel<RequestLocation>('location', { required: true })
-const detection = computed(() => props.testResult?.location ?? (proxyUrl.value.trim() ? null : props.proxy?.lastTest?.location))
+const testedConnection = computed(() => props.testResult ?? (proxyUrl.value.trim() ? null : props.proxy?.lastTest))
+const detection = computed(() => testedConnection.value?.location)
 const detectedLocation = computed(() => detection.value?.status === 'detected'
   ? detection.value.location
   : (!proxyUrl.value.trim() ? props.proxy?.detectedLocation?.location : null))
-const detectionWarning = computed(() => locationDetectionWarning(props.testResult ?? (proxyUrl.value.trim() ? null : props.proxy?.lastTest)))
+const detectionWarning = computed(() => locationDetectionWarning(testedConnection.value))
+const connectionFailure = computed(() => testedConnection.value?.success === false ? testedConnection.value.message : '')
 const showSecret = shallowRef(false)
 const busy = computed(() => props.saving || props.testing)
 const title = computed(() => props.proxy ? '编辑代理' : '新增代理')
@@ -78,10 +74,13 @@ watch(open, () => {
           <p v-if="detectedLocation" class="m-0 break-words text-cp-sm text-cp-text">
             {{ detectedLocation.country }} / {{ detectedLocation.region }} / {{ detectedLocation.city }} · {{ detectedLocation.timezone }}
           </p>
-          <p v-if="detectionWarning" class="m-0 text-cp-sm text-cp-warning-text" role="status">
+          <p v-if="connectionFailure" class="m-0 text-cp-sm text-cp-error-text" role="alert">
+            连接测试失败：{{ connectionFailure }}
+          </p>
+          <p v-if="detectionWarning && !connectionFailure" class="m-0 text-cp-sm text-cp-warning-text" role="status">
             {{ detectionWarning }}{{ detectedLocation ? '，沿用上次位置' : detection?.status === 'conflict' ? '' : '，未使用自动位置覆盖' }}
           </p>
-          <p v-else-if="!detectedLocation" class="m-0 text-cp-sm text-cp-text-secondary">
+          <p v-else-if="!detectedLocation && !connectionFailure" class="m-0 text-cp-sm text-cp-text-secondary">
             保存时自动识别出口位置
           </p>
           <p v-if="proxy?.detectedLocation && !proxyUrl.trim() && !testResult" class="m-0 text-cp-xs text-cp-text-tertiary">

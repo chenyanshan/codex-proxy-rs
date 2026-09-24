@@ -9,12 +9,12 @@ use std::time::{Duration, SystemTime};
 use futures::future::BoxFuture;
 
 use crate::account::{
-    AccountFeedbackStats, AccountRuntimeSignals, CredentialRevision, CredentialState,
-    OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
+    AccountConcurrency, AccountFeedbackStats, AccountRuntimeSignals, CredentialRevision,
+    CredentialState, OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
 };
 use crate::identity::ProviderKind;
 use crate::policy::ClientApiKeyId;
-use crate::routing::UpstreamModelId;
+use crate::routing::{ConfigRevision, UpstreamModelId};
 use crate::validation::{IdentifierError, validate_text};
 
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
@@ -83,18 +83,18 @@ pub struct ProviderSchedulingLeaseRequest {
     provider_kind: ProviderKind,
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
-    max_concurrent: NonZeroU32,
+    max_concurrent: AccountConcurrency,
     request_interval: Duration,
     deadline: SystemTime,
 }
 
 impl ProviderSchedulingLeaseRequest {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         provider_kind: ProviderKind,
         account_id: ProviderAccountId,
         credential_revision: CredentialRevision,
-        max_concurrent: NonZeroU32,
+        max_concurrent: impl Into<AccountConcurrency>,
         request_interval: Duration,
         deadline: SystemTime,
     ) -> Self {
@@ -102,7 +102,7 @@ impl ProviderSchedulingLeaseRequest {
             provider_kind,
             account_id,
             credential_revision,
-            max_concurrent,
+            max_concurrent: max_concurrent.into(),
             request_interval,
             deadline,
         }
@@ -124,7 +124,7 @@ impl ProviderSchedulingLeaseRequest {
     }
 
     #[must_use]
-    pub const fn max_concurrent(&self) -> NonZeroU32 {
+    pub const fn max_concurrent(&self) -> AccountConcurrency {
         self.max_concurrent
     }
 
@@ -943,6 +943,18 @@ pub trait ProviderRuntimePolicyPort: Send + Sync {
         initial: OpaqueProviderData,
     ) -> BoxFuture<'a, Result<OpaqueProviderData, ProviderStoreError>> {
         Box::pin(async move { Ok(initial) })
+    }
+
+    /// 读取候选配置版本实际引用的全局与 Client Key 画像配置。
+    ///
+    /// 实现必须在同一数据库快照内核对 revision，且只返回画像投影，不能读取 Key
+    /// 明文。Provider 代次据此在发布前拒绝已失效的选择。
+    fn load_request_profile_configurations<'a>(
+        &'a self,
+        _revision: ConfigRevision,
+        _provider: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<Vec<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async move { Ok(Vec::new()) })
     }
 
     fn load_refresh_policy(

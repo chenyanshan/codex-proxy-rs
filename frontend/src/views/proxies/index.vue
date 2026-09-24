@@ -1,19 +1,10 @@
 <script setup lang="ts">
 import type { OutboundProxyRecord, OutboundProxyTest } from '@/api'
+import { BaseButton, BaseCard, BaseConfirmModal, BaseIconButton, BaseInput, BasePageHeader, BaseTable, BaseTablePagination, defineTableColumns, toast } from '@codex-proxy/ui'
 import { LockKeyhole, MapPin, Pencil, Plus, Search, Trash2, Users, Wifi } from '@lucide/vue'
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { createProxy, deleteProxy, getProxies, probeProxy, testProxy, updateProxy } from '@/api'
-import BaseButton from '@/components/base/BaseButton.vue'
-import BaseCard from '@/components/base/BaseCard.vue'
-import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import BaseInput from '@/components/base/BaseInput.vue'
-import BasePageHeader from '@/components/base/BasePageHeader.vue'
-import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
-import { defineTableColumns } from '@/components/base/BaseTable/columns'
-import BaseTable from '@/components/base/BaseTable/index.vue'
-import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { usePagedQuery } from '@/composables/usePagedQuery'
 import { formatDateTime } from '@/utils/date'
@@ -82,7 +73,9 @@ async function checkProxy(proxy: OutboundProxyRecord) {
       formTestResult.value = result.lastTest
     }
     const warning = result.autoLocation ? locationDetectionWarning(result.lastTest) : ''
-    if (warning)
+    if (result.lastTest?.success === false)
+      toast.error(`${result.name}：${result.lastTest.message}`)
+    else if (warning)
       toast.warning(`${result.name}：${warning}`)
     else if (result.lastTest?.success)
       toast.success(`${result.name}：连接成功`)
@@ -113,12 +106,12 @@ async function testConnection() {
     const result = await probeProxy({ proxyUrl, detectLocation: form.autoLocation })
     formTestResult.value = result
     const warning = locationDetectionWarning(result)
-    if (warning)
-      toast.warning(warning)
-    else if (result.success)
-      toast.success(`连接成功，耗时 ${result.latencyMs} ms`)
-    else
+    if (!result.success)
       toast.error(result.message)
+    else if (warning)
+      toast.warning(warning)
+    else
+      toast.success(`连接成功，耗时 ${result.latencyMs} ms`)
   })
 }
 
@@ -159,7 +152,9 @@ async function save() {
     showForm.value = false
     form.proxyUrl = ''
     const warning = result.record.autoLocation ? locationDetectionWarning(result.record.lastTest) : ''
-    if (warning)
+    if (result.record.autoLocation && result.record.lastTest?.success === false)
+      toast.warning(`代理已保存，最近一次连接测试失败：${result.record.lastTest.message}`)
+    else if (warning)
       toast.warning(`代理已保存，${warning}`)
     else
       toast.success('代理已保存')

@@ -105,6 +105,7 @@ pub trait ObservabilityService: Send + Sync {
     async fn dashboard_trend(&self, range: TimeRange, kind: TrendKind)
     -> Result<Trend, AdminError>;
     async fn usage_records(&self, query: UsageQuery) -> Result<UsagePage, AdminError>;
+    async fn usage_provider_kinds(&self, range: TimeRange) -> Result<Vec<String>, AdminError>;
     async fn usage_record_detail(&self, request_id: &str) -> Result<UsageDetail, AdminError>;
     async fn usage_summary(
         &self,
@@ -192,42 +193,30 @@ impl DefaultObservabilityService {
             average(first_token_latency_sum_ms, first_token_latency_count);
         let trend = trend(TrendKind::Usage, observation.trend.clone())?;
         let health_timeline = health_timeline_at(&observation.trend, Utc::now());
-        let mut configurations = std::collections::BTreeMap::new();
-        if let Some(configuration) = &settings.openai_client_profile {
-            configurations.insert(
-                gateway_core::routing::ProviderKind::new("openai").expect("static provider kind"),
-                configuration.clone(),
-            );
-        }
-        if let Some(configuration) = &settings.xai_client_profile {
-            configurations.insert(
-                gateway_core::routing::ProviderKind::new("xai").expect("static provider kind"),
-                configuration.clone(),
-            );
-        }
-        let wire_profiles = self.providers.dashboard_wire_profiles(&configurations);
+        let wire_profiles = self
+            .providers
+            .dashboard_wire_profiles(&settings.request_profiles)
+            .map_err(|error| super::map_provider_error(error, "provider profiles"))?;
         let max_concurrent_per_account = u64::from(settings.max_concurrent_per_account);
-        let total_slots = runtime_slots.as_ref().map_or_else(
-            || {
-                observation
-                    .provider_accounts
-                    .normal
-                    .saturating_mul(max_concurrent_per_account)
-            },
-            |slots| {
-                slots
-                    .inherited_accounts
-                    .saturating_mul(max_concurrent_per_account)
-                    .saturating_add(slots.overridden_slots)
-            },
-        );
+        let (inherited_accounts, overridden_slots) = runtime_slots
+            .as_ref()
+            .map_or((observation.provider_accounts.normal, 0), |slots| {
+                (slots.inherited_accounts, slots.overridden_slots)
+            });
+        let total_slots = (max_concurrent_per_account > 0 || inherited_accounts == 0).then(|| {
+            inherited_accounts
+                .saturating_mul(max_concurrent_per_account)
+                .saturating_add(overridden_slots)
+        });
         let used_slots = runtime_slots.and_then(|slots| slots.used_slots);
         Ok(DashboardResult {
             capacity: DashboardCapacity {
                 max_concurrent_per_account,
                 total_slots,
                 used_slots,
-                available_slots: used_slots.map(|used| total_slots.saturating_sub(used)),
+                available_slots: used_slots
+                    .zip(total_slots)
+                    .map(|(used, total)| total.saturating_sub(used)),
             },
             rotation_strategy: settings.rotation_strategy,
             observation,
@@ -283,6 +272,13 @@ impl ObservabilityService for DefaultObservabilityService {
             .map_err(|error| map_store_error(error, "usage records"))?;
         self.enrich_list_billing(&mut page.items);
         Ok(page)
+    }
+
+    async fn usage_provider_kinds(&self, range: TimeRange) -> Result<Vec<String>, AdminError> {
+        self.store
+            .usage_provider_kinds(range)
+            .await
+            .map_err(|error| map_store_error(error, "usage providers"))
     }
 
     async fn usage_record_detail(&self, request_id: &str) -> Result<UsageDetail, AdminError> {

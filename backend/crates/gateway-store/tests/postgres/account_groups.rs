@@ -113,8 +113,11 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
         .expect("load current-page group members");
     assert_eq!(members.len(), 2);
     assert_eq!(
-        members.iter().map(|member| member.total_slots).sum::<u64>(),
-        7
+        members
+            .iter()
+            .map(|member| member.total_slots)
+            .sum::<Option<u64>>(),
+        Some(7)
     );
     assert_eq!(page.total, 2);
     let by_id = page
@@ -134,7 +137,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     assert_eq!(mixed.account_summary.limited, 0);
     assert_eq!(mixed.account_summary.total, 0);
     assert_eq!(mixed.capacity.used_slots, None);
-    assert_eq!(mixed.capacity.total_slots, 0);
+    assert_eq!(mixed.capacity.total_slots, Some(0));
     assert_eq!(mixed.usage.today_usd.as_str(), "0");
     assert_eq!(mixed.usage.retained_total_usd.as_str(), "0");
     let empty = by_id.get(EMPTY_GROUP).expect("empty group");
@@ -170,8 +173,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     let (scope_revision, widened) = keys
         .update_client_key(
             UpdateClientKey {
-                openai_client_profile_override: None,
-                xai_client_profile_override: None,
+                request_profile_override_updates: Default::default(),
                 daily_limit_usd: None,
                 weekly_limit_usd: None,
                 id: client_key_id("key_group_one"),
@@ -197,8 +199,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     let (restricted_revision, restricted) = keys
         .update_client_key(
             UpdateClientKey {
-                openai_client_profile_override: None,
-                xai_client_profile_override: None,
+                request_profile_override_updates: Default::default(),
                 daily_limit_usd: None,
                 weekly_limit_usd: None,
                 id: client_key_id("key_group_one"),
@@ -322,8 +323,7 @@ async fn group_costs_should_include_statusless_websocket_but_reject_statusless_h
 fn new_key(id: &str, group_ids: Vec<AccountGroupId>) -> NewClientKey {
     let marker = char::from(id.as_bytes().last().copied().unwrap_or(b'k'));
     NewClientKey {
-        openai_client_profile_override: None,
-        xai_client_profile_override: None,
+        request_profile_overrides: Default::default(),
         budget: Default::default(),
         id: client_key_id(id),
         name: id.to_owned(),
