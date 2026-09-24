@@ -458,6 +458,9 @@ export interface UsageDiagnosticItem {
 export interface UsageDiagnosticsResponse {
   dimension: string
   items: UsageDiagnosticItem[]
+  currentPage: number
+  pageSize: number
+  hasMore: boolean
 }
 
 // 请求参数类型：仅定义 API 边界的形状，调用方不依赖显式声明。
@@ -483,7 +486,7 @@ interface UsageDetailQuery {
   id: string
 }
 
-type UsageDiagnosticsQuery = UsageRangeQuery & { dimension: string }
+type UsageDiagnosticsQuery = UsageRangeQuery & { dimension: string, currentPage?: number, pageSize?: number }
 
 export function getUsageRecords(data: UsagePageQuery, options: RequestOptions = {}) {
   return request<UsageRecordsResponse>({

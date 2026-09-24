@@ -270,11 +270,12 @@ impl ObservabilityRepository for PgObservabilityRepository {
         range: ObservabilityRange,
         filter: UsageRecordFilter,
         dimension: DiagnosticDimension,
-    ) -> StoreResult<Vec<DiagnosticObservation>> {
+        page: Option<DiagnosticPageQuery>,
+    ) -> StoreResult<DiagnosticObservationPage> {
         self.query_budget
             .run(
                 "load usage diagnostics",
-                usage_diagnostics(&self.pool, range, &filter, dimension),
+                usage_diagnostics(&self.pool, range, &filter, dimension, page),
             )
             .await
     }
@@ -460,18 +461,32 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
         range: admin_observability::TimeRange,
         filter: admin_observability::UsageFilter,
         dimension: admin_observability::DiagnosticDimension,
-    ) -> AdminStoreResult<Vec<admin_observability::DiagnosticObservation>> {
-        self.repository
+        page: Option<admin_observability::DiagnosticPageQuery>,
+    ) -> AdminStoreResult<admin_observability::DiagnosticObservationPage> {
+        let result = self
+            .repository
             .usage_diagnostics(
                 store_range(range)?,
                 store_usage_filter(filter),
                 store_diagnostic_dimension(dimension),
+                page.map(|page| DiagnosticPageQuery {
+                    current_page: page.current_page,
+                    page_size: page.page_size.get(),
+                }),
             )
             .await
-            .map_err(observability_error)?
+            .map_err(observability_error)?;
+        let items = result
+            .items
             .into_iter()
             .map(admin_diagnostic_observation)
-            .collect()
+            .collect::<AdminStoreResult<Vec<_>>>()?;
+        Ok(admin_observability::DiagnosticObservationPage {
+            items,
+            current_page: result.current_page,
+            page_size: result.page_size,
+            has_more: result.has_more,
+        })
     }
 
     async fn list_ops_errors(

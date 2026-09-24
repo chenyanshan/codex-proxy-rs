@@ -165,7 +165,13 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
     let fixture = fixtures::fixture().await;
     let app = crate::openai::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
-    let response = get(&app, "overview", "&model=%20coding%20", &cookie).await;
+    let response = get(
+        &app,
+        "overview",
+        "&model=%20coding%20&currentPage=2&pageSize=1",
+        &cookie,
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     let data = response_json(response).await["data"].clone();
     assert_fields(
@@ -177,6 +183,7 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
             "key",
             "summary",
             "models",
+            "modelsPagination",
             "trend",
             "healthTimeline",
         ],
@@ -203,6 +210,10 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
     assert_eq!(data["trend"][0]["reasoningTokens"], 40);
     assert_eq!(data["summary"]["costUsd"], "0.123456");
     assert_eq!(data["summary"]["costIncomplete"], true);
+    assert_eq!(
+        data["modelsPagination"],
+        json!({"currentPage": 2, "pageSize": 1, "hasMore": false})
+    );
     assert_eq!(
         data["models"],
         json!([{
@@ -244,6 +255,8 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
         observations.diagnostic_queries[0].1.model.as_deref(),
         Some("coding")
     );
+    let page = observations.diagnostic_queries[0].3.expect("model page");
+    assert_eq!((page.current_page, page.page_size.get()), (2, 1));
     let health = observations
         .trends
         .iter()
@@ -388,6 +401,14 @@ async fn unknown_scope_fields_and_unbounded_queries_are_rejected() {
     ] {
         assert!(
             get(&app, "records", extra, &cookie)
+                .await
+                .status()
+                .is_client_error()
+        );
+    }
+    for extra in ["&currentPage=0", "&pageSize=0", "&pageSize=101"] {
+        assert!(
+            get(&app, "overview", extra, &cookie)
                 .await
                 .status()
                 .is_client_error()

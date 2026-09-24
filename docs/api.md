@@ -422,7 +422,7 @@ OpenAI 选号阶段确认本次可选账号全部额度耗尽时，HTTP 返回 `
 
 | 方法 | 路由 | 查询 | 说明 |
 | --- | --- | --- | --- |
-| `GET` | `/api/key-usage/overview` | `startTime`、`endTime`、`model?` | 用量汇总、逐模型 Token 与估算费用、趋势、当前额度和北京时间今日健康时间线 |
+| `GET` | `/api/key-usage/overview` | `startTime`、`endTime`、`model?`、`currentPage?`、`pageSize?` | 用量汇总、逐模型 Token 与估算费用、趋势、当前额度和北京时间今日健康时间线 |
 | `GET` | `/api/key-usage/records` | 同上，另含 `kind?`、`currentPage?`、`pageSize?` | 当前 Key 的成功请求或错误记录 |
 | `GET` | `/api/key-usage/config` | 无 | 当前 Key 的客户端配置凭据 |
 | `GET` | `/api/key-usage/version` | 无 | “关于”弹窗使用的当前版本号和提交号 |
@@ -431,7 +431,9 @@ OpenAI 选号阶段确认本次可选账号全部额度耗尽时，HTTP 返回 `
 不接受 Key ID、账号、Provider 等范围参数或其他未知字段。页码默认 1，每页默认 20，允许 1–100 条；
 `kind` 为 `success`（默认）或 `error`。分页响应为 `{ items, currentPage, pageSize, total }`。
 
-overview 返回 `asOf`、`startTime`、`endTime`、`key`、`summary`、`trend`、`healthTimeline`。
+overview 返回 `asOf`、`startTime`、`endTime`、`key`、`summary`、`models`、`modelsPagination`、`trend`、`healthTimeline`。
+`models` 仅包含当前页，按请求数降序、模型名升序稳定排列；`modelsPagination` 包含 `currentPage`、`pageSize`、`hasMore`。
+overview 的页码仅作用于 `models`，默认第 1 页、每页 20 项，每页允许 1–100 项；后续页需按相同筛选条件请求。
 `key` 仅包含名称、掩码前缀、并发/RPM、日与周限额、已用 USD 及重置时间；零限额表示不限，
 未启动窗口的重置时间为 null。额度使用现有结算账本，不受日志日期或模型筛选影响。
 健康时间线沿用管理端的 96 个北京时间日内桶与可用性语义，不受历史范围和模型筛选影响。
@@ -1497,6 +1499,9 @@ request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可�
 `apiKey`、`keyModel`、`provider`、`transport`、`failureClass`、`status`。`keyModel` 按 Client Key 与模型交叉汇总，
 模型优先采用上游发送值，缺失时采用客户端请求值；
 返回请求数、Token 和估算费用；费用不完整时 `costIncomplete` 为 `true`。
+`keyModel` 支持 `currentPage?`、`pageSize?`，默认第 1 页、每页 20 项，每页允许 1–100 项；
+响应包含 `currentPage`、`pageSize`、`hasMore`，`items` 仅为当前页，按请求数降序、组合键升序稳定排列。
+其他诊断维度保持最多返回前 100 项，不接受分页参数；其响应同样包含页信息，`hasMore` 为 `false`。
 
 `/api/admin/usage/providers` 仅接受可选的 `startTime`、`endTime`，返回 `data: string[]`，没有记录时为空数组。
 时间使用 RFC 3339 格式，包含起点、不包含终点；默认终点为当前时间、起点为终点前 7 天，范围须为正且不超过 366 天。

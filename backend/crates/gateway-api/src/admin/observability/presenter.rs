@@ -1272,6 +1272,9 @@ pub(crate) fn diagnostics_view(
 ) -> DiagnosticsView {
     DiagnosticsView {
         dimension: dimension.display_name().to_owned(),
+        current_page: result.current_page,
+        page_size: result.page_size,
+        has_more: result.has_more,
         items: result
             .items
             .into_iter()
@@ -1313,6 +1316,8 @@ pub(crate) fn map_wire_error(error: WireValidationError) -> AdminError {
         "attemptIndex" => "attemptIndex 超出有效范围",
         "kind" => "Dashboard 趋势类型不合法",
         "dimension" => "诊断维度不合法",
+        "currentPage" => "页码必须大于 0",
+        "pageSize" => "每页数量为 1–100",
         "id" => "用量记录 ID 不能为空",
         "cursor" => "观测数据游标不合法",
         _ => "观测查询参数不合法",

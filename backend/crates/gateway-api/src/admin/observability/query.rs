@@ -95,12 +95,40 @@ pub struct DiagnosticsQuery {
     pub model: Option<String>,
     pub status_code: Option<i64>,
     pub search: Option<String>,
+    pub current_page: Option<u32>,
+    pub page_size: Option<u16>,
 }
 
 impl DiagnosticsQuery {
     /// 解析诊断维度。
     pub fn dimension(&self) -> Result<DiagnosticDimension, WireValidationError> {
         DiagnosticDimension::parse(self.dimension.as_deref())
+    }
+
+    /// Key×模型分页；其余维度保留原有的前 100 项热点诊断合同。
+    pub fn page(
+        &self,
+        dimension: DiagnosticDimension,
+    ) -> Result<Option<domain::DiagnosticPageQuery>, WireValidationError> {
+        if dimension != DiagnosticDimension::KeyModel {
+            if self.current_page.is_some() || self.page_size.is_some() {
+                return Err(WireValidationError::new("dimension"));
+            }
+            return Ok(None);
+        }
+        let current_page = self.current_page.unwrap_or(1);
+        let page_size = self.page_size.unwrap_or(20);
+        if current_page == 0 {
+            return Err(WireValidationError::new("currentPage"));
+        }
+        if !(1..=MAX_PAGE_SIZE).contains(&page_size) {
+            return Err(WireValidationError::new("pageSize"));
+        }
+        Ok(Some(domain::DiagnosticPageQuery {
+            current_page,
+            page_size: DomainPageSize::new(page_size)
+                .map_err(|_| WireValidationError::new("pageSize"))?,
+        }))
     }
 }
 

@@ -385,8 +385,18 @@ pub(crate) async fn usage_diagnostics(
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
     dimension: DiagnosticDimension,
-) -> StoreResult<Vec<DiagnosticObservation>> {
+    page: Option<DiagnosticPageQuery>,
+) -> StoreResult<DiagnosticObservationPage> {
     filter.validate()?;
+    let page_size = page.map_or(DIAGNOSTIC_LIMIT, |page| i64::from(page.page_size));
+    let offset = if let Some(page) = page {
+        observability_page_offset(
+            page.current_page,
+            ObservabilityPageSize::new(page.page_size)?,
+        )?
+    } else {
+        0
+    };
     let dimension_sql = diagnostic_dimension_sql(dimension);
     let completed_usage = completed_usage_fact_predicate("mr");
     let mut statement = QueryBuilder::<Postgres>::new("with matched as (select ");
@@ -450,16 +460,10 @@ pub(crate) async fn usage_diagnostics(
             where currency_grouping = 1
             order by request_count desc, dimension_name limit ",
     );
-    // Key 用量页及管理端 Key×模型视图都需要保留区间内的全部组合。
-    statement.push_bind(
-        if dimension == DiagnosticDimension::KeyModel
-            || (dimension == DiagnosticDimension::Model && filter.client_api_key_ref.is_some())
-        {
-            i64::MAX
-        } else {
-            DIAGNOSTIC_LIMIT
-        },
-    );
+    // 多取一个分组判断是否存在下一页；原有热点诊断仍只返回前 100 组。
+    statement.push_bind(page_size + i64::from(page.is_some()));
+    statement.push(" offset ");
+    statement.push_bind(offset);
     statement.push(
         ")
          select aggregated.*
@@ -504,6 +508,8 @@ pub(crate) async fn usage_diagnostics(
             _ => return Err(postgres_unavailable("decode usage diagnostic grouping")),
         }
     }
+    let has_more = page.is_some() && observations.len() > page_size as usize;
+    observations.truncate(page_size as usize);
     let mut display_names = match dimension {
         DiagnosticDimension::Account => {
             diagnostic_account_display_names(
@@ -555,7 +561,12 @@ pub(crate) async fn usage_diagnostics(
         }
         observation.costs = costs.remove(&observation.key).unwrap_or_default();
     }
-    Ok(observations)
+    Ok(DiagnosticObservationPage {
+        items: observations,
+        current_page: page.map_or(1, |page| page.current_page),
+        page_size: page.map_or(DIAGNOSTIC_LIMIT as u16, |page| page.page_size),
+        has_more,
+    })
 }
 
 pub(crate) async fn diagnostic_account_display_names(

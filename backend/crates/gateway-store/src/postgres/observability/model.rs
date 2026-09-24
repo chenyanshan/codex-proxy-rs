@@ -694,6 +694,20 @@ pub struct DiagnosticObservation {
     pub costs: Vec<CurrencyCostTotal>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticPageQuery {
+    pub current_page: u32,
+    pub page_size: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticObservationPage {
+    pub items: Vec<DiagnosticObservation>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpsErrorRecord {
     pub client_api_key_name: Option<String>,
@@ -795,6 +809,7 @@ pub trait ObservabilityRepository: Send + Sync {
         range: ObservabilityRange,
         filter: UsageRecordFilter,
         dimension: DiagnosticDimension,
-    ) -> StoreResult<Vec<DiagnosticObservation>>;
+        page: Option<DiagnosticPageQuery>,
+    ) -> StoreResult<DiagnosticObservationPage>;
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> StoreResult<OpsErrorPage>;
 }
