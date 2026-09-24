@@ -279,6 +279,8 @@ where
             request_id,
             client_api_key_ref,
             concurrency_wait_budget: ConcurrencyWaitBudget::default(),
+            connection_budget: super::connection::ConnectionBudget::default(),
+            connection_retries: 0,
             observation: ResponseObservation::new(timing_started_at),
             request_observation,
             budget_prior_attempts_usd: Decimal::ZERO,
@@ -395,6 +397,8 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     request_id: ModelRequestId,
     client_api_key_ref: crate::policy::ClientApiKeyId,
     concurrency_wait_budget: ConcurrencyWaitBudget,
+    connection_budget: super::connection::ConnectionBudget,
+    connection_retries: u32,
     observation: ResponseObservation,
     request_observation: Option<RequestObservationDispatch>,
     budget_prior_attempts_usd: Decimal,
@@ -810,7 +814,7 @@ where
                 PollBoundary::Deadline => {
                     // 会话 deadline 是网关自身的请求预算，不是上游超时；
                     // 真正的上游超时会作为流错误进入 `handle_stream_error` 记账。
-                    // 这里不写 provider 失败，避免长流集中到期误触 provider 熔断。
+                    // 这里不写 provider 失败，避免把本地预算到期归因为上游故障。
                     self.finish_interruption(&EngineError::Deadline).await?;
                     return Err(EngineError::Deadline);
                 }
@@ -894,7 +898,13 @@ where
         if let Some(recovery) = pending_retry.as_ref()
             && !recovery.delay.is_zero()
         {
-            match poll_retry_delay(recovery.delay, self.cancellation.clone(), self.deadline).await {
+            let deadline = self
+                .connection_budget
+                .startup_remaining()
+                .map_or(self.deadline, |remaining| {
+                    self.deadline.min(SystemTime::now() + remaining)
+                });
+            match poll_retry_delay(recovery.delay, self.cancellation.clone(), deadline).await {
                 RetryDelayBoundary::Elapsed => {}
                 RetryDelayBoundary::Cancelled => {
                     self.finish_interruption(&EngineError::Cancelled).await?;
@@ -1000,6 +1010,7 @@ where
                 .with_pricing(self.plan.pricing())
                 .with_request_location(self.plan.request_location().cloned())
                 .with_concurrency_wait_budget(self.concurrency_wait_budget.clone())
+                .with_connection_budget(self.connection_budget.clone())
                 .with_timing_started_at(self.observation.timing_started_at)
                 .with_request_policy(self.request_policy.clone())
                 .with_execution_effects(self.execution_effects.as_ref().map(Arc::clone))
@@ -1052,9 +1063,7 @@ where
                 return Err(EngineError::Cancelled);
             }
             ProviderBoundary::Deadline => {
-                // 网关预算到期同样不是候选 Provider 的上游超时，不计入熔断；
-                // Provider 自身的握手/传输超时会以 `ProviderErrorKind::Timeout`
-                // 错误返回并在下方 `Result` 分支记账。
+                // 网关预算到期是本请求的终态，不推定候选 Provider 不可用。
                 self.finish_interruption(&EngineError::Deadline).await?;
                 return Err(EngineError::Deadline);
             }
@@ -1384,6 +1393,10 @@ where
         } else {
             error.send_state()
         };
+        if attempt_send_state != UpstreamSendState::NotSent {
+            // 已发送的容量拒绝、凭据恢复沿用原策略，不再受首次建连窗口限制。
+            self.connection_budget.complete();
+        }
         let execution_effect_observed = self.execution_effect_observed();
         let send_state = self.raise_send_watermark(attempt_send_state);
         if self.request_persisted {
@@ -1415,11 +1428,34 @@ where
                 Some(crate::error::PreDeliveryRetry::AccountRotation)
             )
             && self.routing_attempts < self.plan.max_attempts().get();
+        // 只有尚未发送的逻辑请求进入新增策略；已有发送后安全恢复保持原有路由规则。
+        let connection_retry_requested = self.current_send_state() == UpstreamSendState::NotSent
+            && matches!(
+                error.pre_delivery_retry(),
+                Some(crate::error::PreDeliveryRetry::SameAccountConnectionRetry { .. })
+            );
         let transport_recovery = match error.pre_delivery_retry() {
+            Some(crate::error::PreDeliveryRetry::SameAccountConnectionRetry { transport })
+                if !execution_effect_observed
+                    && !self.connection_budget.exhausted()
+                    && self.downstream_committed_at.is_none()
+                    && !self.delivery_pending
+                    && attempt_send_state == UpstreamSendState::NotSent
+                    && self.current_send_state() == UpstreamSendState::NotSent
+                    && self.continuation_attempt == ContinuationAttempt::None =>
+            {
+                self.connection_budget
+                    .retry_delay(self.connection_retries, self.request_id.as_str())
+                    .map(|delay| {
+                        self.connection_retries += 1;
+                        (transport, delay)
+                    })
+            }
             Some(crate::error::PreDeliveryRetry::SameAccountTransportRetry {
                 retry_index,
                 delay,
             }) if !execution_effect_observed
+                && !self.connection_budget.exhausted()
                 && self.downstream_committed_at.is_none()
                 && !self.delivery_pending
                 && attempt_send_state != UpstreamSendState::Ambiguous =>
@@ -1428,6 +1464,7 @@ where
             }
             Some(crate::error::PreDeliveryRetry::SameAccountTransportFallback)
                 if !execution_effect_observed
+                    && !self.connection_budget.exhausted()
                     && self.downstream_committed_at.is_none()
                     && !self.delivery_pending
                     && attempt_send_state != UpstreamSendState::Ambiguous =>
@@ -1436,7 +1473,9 @@ where
             }
             _ => None,
         };
-        let ordinary_retry = !execution_effect_observed
+        let ordinary_retry = !self.connection_budget.exhausted()
+            && !connection_retry_requested
+            && !execution_effect_observed
             && self.account_selection.required_account().is_none()
             && self.continuation_attempt == ContinuationAttempt::None
             && self.downstream_committed_at.is_none()
@@ -1486,6 +1525,9 @@ where
             "sameAccountRetry": same_account_retry, "accountRotationRetry": account_rotation_retry,
             "ordinaryRetry": ordinary_retry, "transportRecovery": transport_recovery.is_some(),
             "transientRetry": transient_retry.is_some(),
+            "connectionRetry": connection_retry_requested,
+            "connectionRetries": self.connection_retries,
+            "connectionBudgetRemainingMs": self.connection_budget.remaining().map(duration_ms),
             "executionEffectObserved": execution_effect_observed,
             "delayMs": transient_retry.or(transport_recovery.map(|(_, delay)| delay)).map(duration_ms),
             "downstreamCommitted": self.downstream_committed_at.is_some(),

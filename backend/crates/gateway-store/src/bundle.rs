@@ -57,7 +57,7 @@ impl StoreBundle {
         Ok(())
     }
 
-    /// 命令成功、失败或取消后有界排空账本、Key 使用、准入释放与 circuit 反馈。
+    /// 命令成功、失败或取消后有界排空账本、Key 使用与准入释放。
     pub async fn shutdown_command_line_writes(&mut self) -> Result<(), CommandStoreDrainError> {
         match self.command_drain.take() {
             Some(drain) => drain.shutdown().await,
@@ -192,12 +192,6 @@ async fn connect(
     let admissions: Arc<dyn gateway_core::engine::admission::ClientAdmissionPort> = Arc::new(
         redis::RedisClientAdmissionRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?,
     );
-    let circuits: Arc<dyn gateway_core::engine::execution::ProviderCircuitPort> =
-        Arc::new(redis::RedisProviderCircuitRepository::new(
-            redis_connection.clone(),
-            REDIS_NAMESPACE,
-            gateway_core::engine::execution::ProviderCircuitPolicy::default(),
-        )?);
     // Continuation affinity 是下一轮请求的路由事实，Core 必须直接等待 Redis 确认。
     let continuation: Arc<dyn gateway_core::engine::continuation::NativeContinuationPort> =
         Arc::new(redis::RedisNativeContinuationRepository::new(
@@ -206,7 +200,6 @@ async fn connect(
         )?);
     let (admissions, admission_release_writer) =
         redis::BufferedClientAdmissionPort::new(admissions);
-    let (circuits, circuit_feedback_writer) = redis::BufferedProviderCircuitPort::new(circuits);
     let core_ports = CoreStorePorts::new(
         execution,
         (
@@ -215,7 +208,6 @@ async fn connect(
                 pool.clone(),
             )),
         ),
-        Arc::new(circuits),
         continuation,
         (
             Arc::new(postgres::PgRuntimeSnapshotRepository::new(pool.clone())),
@@ -263,7 +255,6 @@ async fn connect(
                 execution_writer,
                 client_key_usage_writer,
                 admission_release_writer,
-                circuit_feedback_writer,
                 retention,
             )?,
             None,
@@ -274,7 +265,6 @@ async fn connect(
                 execution: execution_writer,
                 client_key_usage: client_key_usage_writer,
                 admission_release: admission_release_writer,
-                circuit_feedback: circuit_feedback_writer,
             }),
         ),
     };

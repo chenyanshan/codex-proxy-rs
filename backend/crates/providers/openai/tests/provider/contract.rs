@@ -11166,3 +11166,197 @@ async fn websocket_new_chain_skips_http_only_oauth_credential_before_lease() {
     assert_eq!(store.credential_loads(), 2);
     assert_eq!(leases.requests.lock().expect("leases").len(), 1);
 }
+
+#[tokio::test]
+async fn transient_socks_openings_offer_same_account_http_retry_and_send_one_payload() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = format!("socks5h://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for opening in 0..3 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut greeting = [0_u8; 2];
+            socket.read_exact(&mut greeting).await.unwrap();
+            assert_eq!(greeting[0], 5);
+            let mut methods = vec![0; usize::from(greeting[1])];
+            socket.read_exact(&mut methods).await.unwrap();
+            if opening < 2 {
+                continue;
+            }
+            socket.write_all(&[5, 0]).await.unwrap();
+            let mut connect = [0_u8; 4];
+            socket.read_exact(&mut connect).await.unwrap();
+            assert_eq!(connect, [5, 1, 0, 3]);
+            let length = socket.read_u8().await.unwrap();
+            let mut target = vec![0; usize::from(length) + 2];
+            socket.read_exact(&mut target).await.unwrap();
+            socket
+                .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 80])
+                .await
+                .unwrap();
+            read_http_request(&mut socket).await;
+            let body = CAPTURE_COMPLETED_SSE;
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        }
+    });
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    store.set_egress(
+        "acct_provider_contract",
+        Some(gateway_core::account::OutboundProxy::parse(&proxy).unwrap()),
+        None,
+    );
+    let provider = provider_with_base_url(&store, "http://upstream.invalid".to_owned());
+    let context = fallback_transport_context("req_socks_recovery");
+    for opening in 0..3 {
+        let mut stream = provider
+            .clone()
+            .execute(
+                planned_request("openai", generate_operation()),
+                context.clone(),
+            )
+            .await
+            .unwrap();
+        let mut failure = None;
+        while let Some(event) = stream.next().await {
+            if let Err(error) = event {
+                failure = Some(error);
+                break;
+            }
+        }
+        if opening < 2 {
+            let failure = failure.expect("SOCKS negotiation must fail before payload");
+            assert_eq!(failure.send_state(), UpstreamSendState::NotSent);
+            assert!(matches!(
+                failure.pre_delivery_retry(),
+                Some(PreDeliveryRetry::SameAccountConnectionRetry {
+                    transport: AttemptTransport::Fallback
+                })
+            ));
+        } else {
+            assert!(failure.is_none());
+        }
+    }
+    timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn lost_http_response_after_payload_does_not_request_connection_replay() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_http_request(&mut socket).await;
+    });
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let mut stream = provider_with_base_url(&store, base)
+        .execute(
+            planned_request("openai", generate_operation()),
+            fallback_transport_context("req_response_lost"),
+        )
+        .await
+        .unwrap();
+    let mut failure = None;
+    while let Some(event) = stream.next().await {
+        if let Err(error) = event {
+            failure = Some(error);
+            break;
+        }
+    }
+    let failure = failure.unwrap();
+    assert_ne!(failure.send_state(), UpstreamSendState::NotSent);
+    assert!(!matches!(
+        failure.pre_delivery_retry(),
+        Some(PreDeliveryRetry::SameAccountConnectionRetry { .. })
+    ));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn stalled_proxy_connections_share_thirty_seconds_instead_of_resetting_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = format!("socks5h://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        loop {
+            sockets.push(listener.accept().await.unwrap().0);
+        }
+    });
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    store.set_egress(
+        "acct_provider_contract",
+        Some(gateway_core::account::OutboundProxy::parse(&proxy).unwrap()),
+        None,
+    );
+    let provider = provider_with_base_url(&store, "http://upstream.invalid".to_owned());
+    let context = fallback_transport_context("req_socks_timeout");
+    let started = std::time::Instant::now();
+    timeout(Duration::from_secs(32), async {
+        for _ in 0..4 {
+            let mut stream = provider
+                .clone()
+                .execute(
+                    planned_request("openai", generate_operation()),
+                    context.clone(),
+                )
+                .await
+                .unwrap();
+            let mut failure = None;
+            while let Some(event) = stream.next().await {
+                if let Err(error) = event {
+                    failure = Some(error);
+                    break;
+                }
+            }
+            let failure = failure.unwrap();
+            assert_eq!(failure.kind(), ProviderErrorKind::Timeout);
+            assert_eq!(failure.send_state(), UpstreamSendState::NotSent);
+        }
+    })
+    .await
+    .expect("shared recovery window must not become four 15-second timeouts");
+    assert!(started.elapsed() >= Duration::from_secs(25));
+    assert!(context.connection_budget().exhausted());
+    server.abort();
+    let _ = server.await;
+}
+
+pub(crate) async fn assert_local_connection_capacity_is_not_an_upstream_failure() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    // 显式出口使 Provider 使用生产建连层，而不是测试注入的裸 reqwest client。
+    store.set_egress(
+        "acct_provider_contract",
+        Some(gateway_core::account::OutboundProxy::parse("http://127.0.0.1:9").unwrap()),
+        None,
+    );
+    let mut stream = provider_with_base_url(&store, "http://127.0.0.1:9".to_owned())
+        .execute(
+            planned_request("openai", generate_operation()),
+            fallback_transport_context("req_local_capacity"),
+        )
+        .await
+        .unwrap();
+    let mut failure = None;
+    while let Some(event) = stream.next().await {
+        if let Err(error) = event {
+            failure = Some(error);
+            break;
+        }
+    }
+    let failure = failure.unwrap();
+    assert_eq!(
+        failure.kind(),
+        ProviderErrorKind::ProviderInfrastructureUnavailable
+    );
+    assert_eq!(failure.send_state(), UpstreamSendState::NotSent);
+    assert_eq!(failure.diagnostic().unwrap().stage(), Some("admission"));
+    assert_eq!(
+        failure.diagnostic().unwrap().code(),
+        Some("local_connection_capacity")
+    );
+}

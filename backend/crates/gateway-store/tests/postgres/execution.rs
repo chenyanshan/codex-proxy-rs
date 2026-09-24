@@ -1995,3 +1995,36 @@ async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates
     assert_eq!(charges, 0);
     database.close().await;
 }
+
+#[tokio::test]
+async fn entry_rejection_is_visible_without_a_fictitious_model_execution() {
+    let Some(database) = TestDatabase::create("entry_rejection").await else {
+        return;
+    };
+    let repository = PgExecutionStore::new(database.pool.clone());
+    repository
+        .record_entry_rejection(gateway_core::engine::EntryRejection {
+            request_id: ModelRequestId::new("req_entry_rejection").unwrap(),
+            client_key_id: ClientApiKeyId::new("key_entry").unwrap(),
+            error: GatewayError::new(GatewayErrorKind::NoAvailableProvider, "no route"),
+            latency: StdDuration::from_millis(12),
+        })
+        .await
+        .unwrap();
+    let row: (Option<String>, String, String, i64) = sqlx::query_as(
+        "select model_request_id, failure_kind, message, latency_ms from ops_events where component = 'request_entry' and operation = 'reject'"
+    ).fetch_one(&database.pool).await.unwrap();
+    assert!(row.0.is_none());
+    assert_eq!(row.1, GatewayErrorKind::NoAvailableProvider.as_str());
+    assert_eq!(
+        serde_json::from_str::<Value>(&row.2).unwrap()["requestId"],
+        "req_entry_rejection"
+    );
+    assert_eq!(row.3, 12);
+    let count: i64 = sqlx::query_scalar("select count(*) from model_requests")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    database.close().await;
+}

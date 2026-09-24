@@ -1062,7 +1062,7 @@ impl RuntimeSnapshot {
         self.client_policies.get(id)
     }
 
-    /// 返回当前 Key 范围、本代次注册表与 circuit 条件共同允许的 Provider。
+    /// 返回当前 Key 范围、本代次注册表与请求路由限制共同允许的 Provider。
     #[must_use]
     pub fn available_providers(
         &self,
@@ -1183,7 +1183,7 @@ impl RuntimeSnapshot {
         }
 
         if candidates.is_empty() {
-            // 模型存在性必须包含被熔断的 Provider；目录未知时不能断言模型不存在。
+            // 模型存在性必须包含被请求路由限制排除的 Provider；目录未知时不能断言模型不存在。
             let mut scoped_providers = providers.intersection(&self.providers).peekable();
             if scoped_providers.peek().is_some()
                 && scoped_providers.all(|provider| {

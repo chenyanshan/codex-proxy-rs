@@ -111,7 +111,6 @@ fn service(admissions: Arc<Admissions>, budget: Arc<Budget>) -> DefaultExecution
         Arc::new(TrackingExecutionStore::default()),
         ProviderRegistry::default(),
         admissions,
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     )
@@ -280,7 +279,6 @@ fn reused_client_uses_updated_limits_for_each_execution() {
         Arc::new(TrackingExecutionStore::default()),
         ProviderRegistry::default(),
         admissions.clone(),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -312,7 +310,6 @@ fn reused_client_cannot_start_after_key_disable_or_snapshot_suspension() {
             Arc::new(TrackingExecutionStore::default()),
             ProviderRegistry::default(),
             admissions.clone(),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         );
@@ -416,7 +413,6 @@ fn reused_client_is_reauthenticated_by_the_current_frontend_plan_without_identit
             Arc::new(TrackingExecutionStore::default()),
             ProviderRegistry::default(),
             admissions.clone(),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         )
@@ -508,7 +504,6 @@ fn early_failure_service(
         store,
         ProviderRegistry::new([Arc::new(LocalFailingProvider) as Arc<dyn Provider>]).unwrap(),
         admissions,
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     )
@@ -738,7 +733,6 @@ fn published_provider_update_does_not_replace_an_already_started_request() {
             Arc::new(TrackingExecutionStore::default()),
             index.registry(),
             Arc::new(Admissions::default()),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         );
@@ -1020,7 +1014,6 @@ fn completed_parent_rejects_new_nested_execution_and_cancels_an_active_child() {
             Arc::new(TrackingExecutionStore::default()),
             provider_index.registry(),
             Arc::new(Admissions::default()),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         )
@@ -1213,7 +1206,6 @@ fn native_response_processing_uses_the_real_translation_boundary() {
             Arc::new(TrackingExecutionStore::default()),
             provider_index.registry(),
             Arc::new(Admissions::default()),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         )
@@ -1365,7 +1357,6 @@ fn response_translation_zero_output_preserves_canonical_usage_and_finalization()
             store.clone(),
             provider_index.registry(),
             Arc::new(Admissions::default()),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         );
@@ -1522,7 +1513,6 @@ fn native_response_failure_after_downstream_commit_is_not_replayed() {
             Arc::new(TrackingExecutionStore::default()),
             provider_index.registry(),
             Arc::new(Admissions::default()),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         );
@@ -1609,7 +1599,6 @@ fn model_routing_policy_selects_native_and_generation_plugin_providers() {
                 Arc::new(TrackingExecutionStore::default()),
                 provider_index.registry(),
                 Arc::new(Admissions::default()),
-                Arc::new(UnusedCircuits),
                 Arc::new(UnusedContinuation),
                 Arc::new(RecordingClientApiKeyUsage::default()),
             )
@@ -1665,7 +1654,6 @@ fn model_routing_reject_stops_before_provider_execution() {
             Arc::new(TrackingExecutionStore::default()),
             provider_index.registry(),
             Arc::new(Admissions::default()),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         )
@@ -1751,7 +1739,6 @@ fn model_routing_cannot_expand_the_frozen_key_model_scope() {
             Arc::new(TrackingExecutionStore::default()),
             provider_index.registry(),
             Arc::new(Admissions::default()),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         )
@@ -1899,7 +1886,6 @@ fn scheduler_reject_is_a_terminal_policy_rejection_before_upstream_send() {
             Arc::new(TrackingExecutionStore::default()),
             provider_index.registry(),
             Arc::new(Admissions::default()),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         )
@@ -2175,7 +2161,6 @@ fn observation_service(
         Arc::new(TrackingExecutionStore::default()),
         provider_extensions.registry(),
         admissions,
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     )
@@ -2216,7 +2201,6 @@ fn fallback_exhaustion_observation_uses_the_last_actual_provider_not_the_candida
             Arc::new(TrackingExecutionStore::default()),
             provider_extensions.registry(),
             Arc::new(Admissions::default()),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         )
@@ -2284,7 +2268,6 @@ fn routing_external_effect_stops_a_not_sent_provider_retry() {
             Arc::new(TrackingExecutionStore::default()),
             provider_extensions.registry(),
             Arc::new(Admissions::default()),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         )
@@ -2486,7 +2469,6 @@ fn charged_service(
         }) as Arc<dyn Provider>])
         .unwrap(),
         admissions,
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -2764,9 +2746,8 @@ use gateway_core::engine::continuation::{
 };
 use gateway_core::engine::execution::{
     ClientApiKeyUsageSink, ClientKeyVerifier, ClientTransport, DefaultExecutionService,
-    ExecutionRequestMetadata, ExecutionService, ExecutionSession, ProviderCircuitDecision,
-    ProviderCircuitError, ProviderCircuitPort, StartExecution, StartProviderExecution,
-    provider_failure_affects_circuit,
+    ExecutionRequestMetadata, ExecutionService, ExecutionSession, StartExecution,
+    StartProviderExecution,
 };
 use gateway_core::engine::extensions::ProviderExtensionIndex;
 use gateway_core::engine::nested::NestedModelExecutionRequest;
@@ -2815,30 +2796,6 @@ use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use serde_json::{Value, json};
 
 #[test]
-fn only_provider_attributable_failures_should_affect_circuit() {
-    assert!(provider_failure_affects_circuit(ProviderErrorKind::Timeout));
-    assert!(provider_failure_affects_circuit(
-        ProviderErrorKind::Transport
-    ));
-    assert!(!provider_failure_affects_circuit(
-        ProviderErrorKind::RateLimited
-    ));
-    assert!(!provider_failure_affects_circuit(
-        ProviderErrorKind::InvalidRequest
-    ));
-    assert!(!provider_failure_affects_circuit(
-        ProviderErrorKind::ContinuationRecoveryRequired
-    ));
-    assert!(!provider_failure_affects_circuit(
-        ProviderErrorKind::UpstreamCapacityUnavailable
-    ));
-    // 上游 close 1009（message too big）是请求自身的问题：不得熔断 provider。
-    assert!(!provider_failure_affects_circuit(
-        ProviderErrorKind::MessageTooBig
-    ));
-}
-
-#[test]
 fn account_probe_should_not_write_to_the_persistent_execution_store() {
     let store = Arc::new(TrackingExecutionStore::default());
     let service = DefaultExecutionService::new(
@@ -2846,7 +2803,6 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
         store.clone(),
         ProviderRegistry::default(),
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -2878,7 +2834,6 @@ fn probe_failures_should_be_observable_without_a_model_request_row() {
         store.clone(),
         providers,
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -2924,7 +2879,6 @@ fn provider_local_probe_failure_should_remain_distinct_from_upstream() {
         store,
         providers,
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -2967,7 +2921,6 @@ fn diagnostic_probe_does_not_apply_data_plane_account_model_policy() {
         ProviderRegistry::new([Arc::new(LocalFailingProvider) as Arc<dyn Provider>])
             .expect("providers"),
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -2999,7 +2952,6 @@ fn probe_observation_store_failure_preserves_the_provider_error() {
         store.clone(),
         providers,
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -3094,7 +3046,6 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
             ProviderRegistry::new([Arc::new(NativeCatalogProvider { fail }) as Arc<dyn Provider>])
                 .expect("registry"),
             Arc::new(UnusedAdmissions),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         );
@@ -3246,7 +3197,6 @@ fn successful_authentication_should_record_client_key_usage() {
         Arc::new(TrackingExecutionStore::default()),
         ProviderRegistry::default(),
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         usage.clone(),
     );
@@ -3266,7 +3216,6 @@ fn client_key_verification_should_not_record_client_key_usage() {
         Arc::new(TrackingExecutionStore::default()),
         ProviderRegistry::default(),
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         usage.clone(),
     );
@@ -3288,7 +3237,6 @@ fn request_verification_should_apply_entry_authentication_without_recording_key_
             Arc::new(TrackingExecutionStore::default()),
             ProviderRegistry::default(),
             Arc::new(UnusedAdmissions),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             usage.clone(),
         );
@@ -3322,7 +3270,6 @@ fn assert_provider_endpoint_observation(model: Option<&str>) {
         }) as Arc<dyn Provider>])
         .expect("provider registry"),
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -3369,83 +3316,13 @@ fn assert_provider_endpoint_observation(model: Option<&str>) {
 }
 
 #[test]
-fn circuit_store_failure_should_fail_open_during_request_start() {
-    let service = DefaultExecutionService::new(
-        RuntimeSnapshotHandle::new(start_snapshot()),
-        Arc::new(TrackingExecutionStore::default()),
-        ProviderRegistry::default(),
-        Arc::new(UnusedAdmissions),
-        Arc::new(FailingDecisionCircuits),
-        Arc::new(UnusedContinuation),
-        Arc::new(RecordingClientApiKeyUsage::default()),
-    );
-    let client = service
-        .authenticate("sk_start_test")
-        .expect("authenticated client");
-
-    let started = block_on(service.start(StartExecution {
-        client,
-        public_model: PublicModelId::new("gpt-start").expect("public model"),
-        operation: start_operation(),
-        metadata: ExecutionRequestMetadata {
-            protocol: "openai".to_owned(),
-            endpoint: "/v1/responses".to_owned(),
-            transport: ClientTransport::HttpJson,
-            stream: false,
-            client_ip: None,
-            user_agent: None,
-            previous_response_id: None,
-        },
-    }))
-    .expect("recoverable circuit state must not reject the request");
-
-    assert!(!started.session.is_finalized());
-}
-
-#[test]
-fn slow_circuit_store_should_time_out_and_fail_open_during_request_start() {
-    let service = DefaultExecutionService::new(
-        RuntimeSnapshotHandle::new(start_snapshot()),
-        Arc::new(TrackingExecutionStore::default()),
-        ProviderRegistry::default(),
-        Arc::new(UnusedAdmissions),
-        Arc::new(PendingDecisionCircuits),
-        Arc::new(UnusedContinuation),
-        Arc::new(RecordingClientApiKeyUsage::default()),
-    );
-    let client = service
-        .authenticate("sk_start_test")
-        .expect("authenticated client");
-    let started_at = Instant::now();
-
-    let started = block_on(service.start(StartExecution {
-        client,
-        public_model: PublicModelId::new("gpt-start").expect("public model"),
-        operation: start_operation(),
-        metadata: ExecutionRequestMetadata {
-            protocol: "openai".to_owned(),
-            endpoint: "/v1/responses".to_owned(),
-            transport: ClientTransport::HttpJson,
-            stream: false,
-            client_ip: None,
-            user_agent: None,
-            previous_response_id: None,
-        },
-    }))
-    .expect("slow recoverable circuit state must not reject the request");
-
-    assert!(started_at.elapsed() < Duration::from_secs(2));
-    assert!(!started.session.is_finalized());
-}
-
-#[test]
 fn known_catalog_should_reject_a_model_that_the_provider_did_not_publish() {
+    let store = Arc::new(TrackingExecutionStore::default());
     let service = DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(start_snapshot()),
-        Arc::new(TrackingExecutionStore::default()),
+        store.clone(),
         ProviderRegistry::default(),
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -3479,6 +3356,10 @@ fn known_catalog_should_reject_a_model_that_the_provider_did_not_publish() {
             "the requested model was not found in the provider catalogs available to this API key; check the model name",
         )
     );
+    let rejections = store.entry_rejections.lock().unwrap();
+    assert_eq!(rejections.len(), 1);
+    assert_eq!(rejections[0].error.kind(), GatewayErrorKind::ModelNotFound);
+    assert!(store.requests.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -3488,7 +3369,6 @@ fn continuation_owned_by_another_client_api_key_should_fail_closed() {
         Arc::new(TrackingExecutionStore::default()),
         ProviderRegistry::default(),
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(RejectedContinuation::OwnershipMismatch),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -3516,7 +3396,6 @@ fn invalid_continuation_record_should_not_be_forwarded_as_an_external_handle() {
         Arc::new(TrackingExecutionStore::default()),
         ProviderRegistry::default(),
         Arc::new(UnusedAdmissions),
-        Arc::new(UnusedCircuits),
         Arc::new(RejectedContinuation::InvalidData),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -3573,6 +3452,7 @@ impl ClientApiKeyUsageSink for RecordingClientApiKeyUsage {
 struct TrackingExecutionStore {
     touched: AtomicBool,
     probe_failures: Mutex<Vec<String>>,
+    entry_rejections: Mutex<Vec<gateway_core::engine::EntryRejection>>,
     requests: Mutex<Vec<NewModelRequest>>,
     attempts: Mutex<Vec<AttemptRecord>>,
     finalizations: Mutex<Vec<ModelRequestFinalization>>,
@@ -3635,6 +3515,14 @@ impl TrackingExecutionStore {
 
 #[async_trait]
 impl ExecutionStore for TrackingExecutionStore {
+    async fn record_entry_rejection(
+        &self,
+        rejection: gateway_core::engine::EntryRejection,
+    ) -> Result<(), StoreError> {
+        self.entry_rejections.lock().unwrap().push(rejection);
+        Ok(())
+    }
+
     async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError> {
         self.touch();
         self.creates.fetch_add(1, Ordering::SeqCst);
@@ -3749,81 +3637,6 @@ impl ClientAdmissionPort for UnusedAdmissions {
         _: ClientAdmissionRecovery,
     ) -> BoxFuture<'_, Result<ClientAdmissionRestoreResult, ClientAdmissionError>> {
         Box::pin(async { Ok(ClientAdmissionRestoreResult::default()) })
-    }
-}
-
-struct UnusedCircuits;
-
-impl ProviderCircuitPort for UnusedCircuits {
-    fn decision<'a>(
-        &'a self,
-        _: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>> {
-        Box::pin(async { Ok(ProviderCircuitDecision::Allow) })
-    }
-
-    fn observe_failure<'a>(
-        &'a self,
-        _: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn observe_success<'a>(
-        &'a self,
-        _: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
-struct FailingDecisionCircuits;
-
-impl ProviderCircuitPort for FailingDecisionCircuits {
-    fn decision<'a>(
-        &'a self,
-        _: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>> {
-        Box::pin(async { Err(ProviderCircuitError) })
-    }
-
-    fn observe_failure<'a>(
-        &'a self,
-        _: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn observe_success<'a>(
-        &'a self,
-        _: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
-struct PendingDecisionCircuits;
-
-impl ProviderCircuitPort for PendingDecisionCircuits {
-    fn decision<'a>(
-        &'a self,
-        _: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>> {
-        Box::pin(futures::future::pending())
-    }
-
-    fn observe_failure<'a>(
-        &'a self,
-        _: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn observe_success<'a>(
-        &'a self,
-        _: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
-        Box::pin(async { Ok(()) })
     }
 }
 
@@ -4072,7 +3885,6 @@ fn account_wait_inherits_the_budget_spent_during_client_admission() {
             )
             .unwrap(),
             admissions.clone(),
-            Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         );
@@ -4180,7 +3992,6 @@ fn queue_service(
         Arc::new(TrackingExecutionStore::default()),
         ProviderRegistry::default(),
         admissions.clone(),
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -4305,7 +4116,6 @@ fn reused_websocket_client_gets_group_fast_policy_from_each_new_request_snapshot
         Arc::new(TrackingExecutionStore::default()),
         ProviderRegistry::new([provider.clone() as Arc<dyn Provider>]).unwrap(),
         admissions,
-        Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
@@ -4324,4 +4134,55 @@ fn reused_websocket_client_gets_group_fast_policy_from_each_new_request_snapshot
         block_on(started.session.detach_finalize());
     }
     assert_eq!(*provider.policies.lock().unwrap(), vec![true, false]);
+}
+
+#[test]
+fn repeated_connection_failures_never_block_later_requests_for_the_provider() {
+    let store = Arc::new(TrackingExecutionStore::default());
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(client_snapshot()),
+        store.clone(),
+        ProviderRegistry::new([Arc::new(ColdFailingProvider {
+            requested_model: None,
+        }) as Arc<dyn Provider>])
+        .expect("provider registry"),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    for _ in 0..5 {
+        let client = service
+            .authenticate("sk_usage_test")
+            .expect("authenticated client");
+        let operation = Operation::GenerateImage(ImageRequest::from_raw_json(
+            ImageRequestKind::Generation,
+            RawJsonPayload::new(
+                "openai",
+                Bytes::from_static(br#"{"model":"gpt-image-2","prompt":"hello"}"#),
+            )
+            .expect("image payload"),
+        ));
+
+        let mut started = block_on(service.start_provider_endpoint(StartProviderExecution {
+            client,
+            provider: ProviderKind::new("openai").expect("provider"),
+            upstream_model: None,
+            operation,
+            metadata: ExecutionRequestMetadata {
+                protocol: "openai".to_owned(),
+                endpoint: "/v1/images/generations".to_owned(),
+                transport: ClientTransport::HttpJson,
+                stream: false,
+                client_ip: None,
+                user_agent: None,
+                previous_response_id: None,
+            },
+        }))
+        .expect("provider endpoint request should start without a text catalog entry");
+
+        let _error = block_on(started.session.collect_uncommitted())
+            .expect_err("the cold provider stops execution after persistence");
+    }
+    assert_eq!(store.requests.lock().unwrap().len(), 5);
+    assert!(store.entry_rejections.lock().unwrap().is_empty());
 }

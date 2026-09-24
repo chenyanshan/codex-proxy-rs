@@ -3,6 +3,7 @@
 pub mod admission;
 pub mod authentication;
 pub mod budget;
+pub mod connection;
 pub mod continuation;
 pub mod coordinator;
 pub mod execution;
@@ -120,9 +121,9 @@ impl AttemptTrigger {
     }
 }
 
-/// 一次实际上游调用对 Provider 健康度产生的事实。
+/// 一次实际上游调用的诊断结果。
 ///
-/// 该事实只描述调用结果，不在 Core 中定义 circuit 策略或持久化方式。
+/// 该事实只描述调用结果，不参与跨请求的路由屏蔽。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderAttemptOutcome {
     /// 上游流自然完成且通过 canonical event 序列校验。
@@ -331,6 +332,7 @@ pub struct RequestAttemptContext {
     timing_started_at: Instant,
     trace: crate::diagnostics::TraceContext,
     concurrency_wait_budget: crate::concurrency::ConcurrencyWaitBudget,
+    connection_budget: connection::ConnectionBudget,
     request_policy: Option<policy::RequestPolicyContext>,
     execution_effects: Option<Arc<nested::ExecutionEffects>>,
     middleware: Option<middleware::FrozenMiddlewarePlan>,
@@ -383,6 +385,7 @@ impl RequestAttemptContext {
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
             concurrency_wait_budget: crate::concurrency::ConcurrencyWaitBudget::default(),
+            connection_budget: connection::ConnectionBudget::default(),
             request_policy: None,
             execution_effects: None,
             middleware: None,
@@ -406,6 +409,13 @@ impl RequestAttemptContext {
         budget: crate::concurrency::ConcurrencyWaitBudget,
     ) -> Self {
         self.concurrency_wait_budget = budget;
+        self
+    }
+
+    /// 传递请求内共享的连接恢复预算。
+    #[must_use]
+    pub fn with_connection_budget(mut self, budget: connection::ConnectionBudget) -> Self {
+        self.connection_budget = budget;
         self
     }
 
@@ -725,6 +735,11 @@ impl AttemptContext {
         self.continuation_attempt
     }
 
+    #[must_use]
+    pub const fn connection_budget(&self) -> &connection::ConnectionBudget {
+        &self.request.connection_budget
+    }
+
     /// 返回本次 attempt 的 Provider 传输档位。
     #[must_use]
     pub const fn transport(&self) -> AttemptTransport {
@@ -814,6 +829,15 @@ pub struct IntermediateFailure {
     pub upstream_status_code: Option<u16>,
     pub upstream_request_id: Option<String>,
     pub error: ProviderError,
+    pub latency: Duration,
+}
+
+/// 已认证有效请求在执行会话建立前的拒绝；不伪造模型执行或上游 attempt。
+#[derive(Debug)]
+pub struct EntryRejection {
+    pub request_id: ModelRequestId,
+    pub client_key_id: ClientApiKeyId,
+    pub error: GatewayError,
     pub latency: Duration,
 }
 
@@ -927,6 +951,11 @@ pub trait ExecutionStore: Send + Sync {
         &self,
         failure: IntermediateFailure,
     ) -> Result<(), StoreError>;
+    /// 记录路由或准入拒绝；可恢复观测失败不改变客户端结果。
+    async fn record_entry_rejection(&self, _rejection: EntryRejection) -> Result<(), StoreError> {
+        Ok(())
+    }
+
     /// 记录不挂在 `model_requests` 上的账号探测失败；默认丢弃。
     async fn record_probe_failure(&self, _failure: ProbeFailure) -> Result<(), StoreError> {
         Ok(())

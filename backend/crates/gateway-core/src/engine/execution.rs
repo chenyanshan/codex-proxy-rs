@@ -1,9 +1,8 @@
-//! 数据面执行用例：认证、准入、路由、continuation、circuit 与会话生命周期。
+//! 数据面执行用例：认证、准入、路由、continuation 与会话生命周期。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::IpAddr;
-use std::num::NonZeroU32;
 use std::sync::{
     Arc, Mutex, Weak,
     atomic::{AtomicUsize, Ordering},
@@ -52,9 +51,9 @@ use crate::engine::provider::ProviderRegistry;
 use crate::engine::{
     AttemptCoordinator, AttemptRecord, CoordinatedEvent, EngineError, ExecutionStore,
     GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
-    ProbeFailure, ProviderAccountId, ProviderAttemptOutcome, RecoveryReport, UpstreamSendState,
+    ProbeFailure, ProviderAccountId, RecoveryReport, UpstreamSendState,
 };
-use crate::error::{GatewayError, GatewayErrorKind, ProviderErrorKind, StoreError};
+use crate::error::{GatewayError, GatewayErrorKind, StoreError};
 use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
 use crate::identity::ProviderKind;
 use crate::lifecycle::CancellationToken;
@@ -649,47 +648,6 @@ pub trait ClientApiKeyUsageSink: Send + Sync {
     fn record_used(&self, key_id: &ClientApiKeyId);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderCircuitDecision {
-    Allow,
-    BlockedUntil(SystemTime),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("provider circuit store is unavailable")]
-pub struct ProviderCircuitError;
-
-/// Provider circuit 的可重建协调策略；由 Core 拥有并交给 Store adapter 执行。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProviderCircuitPolicy {
-    pub failure_threshold: NonZeroU32,
-    pub open_duration: Duration,
-}
-
-impl Default for ProviderCircuitPolicy {
-    fn default() -> Self {
-        Self {
-            failure_threshold: NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
-            open_duration: Duration::from_secs(30),
-        }
-    }
-}
-
-pub trait ProviderCircuitPort: Send + Sync {
-    fn decision<'a>(
-        &'a self,
-        provider_kind: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>>;
-    fn observe_failure<'a>(
-        &'a self,
-        provider_kind: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>>;
-    fn observe_success<'a>(
-        &'a self,
-        provider_kind: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>>;
-}
-
 pub struct DefaultExecutionService {
     snapshots: RuntimeSnapshotHandle,
     /// probe 自身走 transient store，探测失败仍写入持久 store 的 ops_events。
@@ -697,7 +655,6 @@ pub struct DefaultExecutionService {
     providers: ProviderRegistry,
     admissions: Arc<dyn ClientAdmissionPort>,
     admission_waiting: ConcurrencyWaitQueue<ClientApiKeyId>,
-    circuits: Arc<dyn ProviderCircuitPort>,
     continuation: Arc<dyn NativeContinuationPort>,
     client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
     budget: Option<Arc<dyn ClientBudgetPort>>,
@@ -717,7 +674,6 @@ impl DefaultExecutionService {
         execution: Arc<dyn ExecutionStore>,
         providers: ProviderRegistry,
         admissions: Arc<dyn ClientAdmissionPort>,
-        circuits: Arc<dyn ProviderCircuitPort>,
         continuation: Arc<dyn NativeContinuationPort>,
         client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
     ) -> Self {
@@ -727,7 +683,6 @@ impl DefaultExecutionService {
             providers,
             admissions,
             admission_waiting: ConcurrencyWaitQueue::default(),
-            circuits,
             continuation,
             client_api_key_usage,
             budget: None,
@@ -1029,14 +984,7 @@ impl DefaultExecutionService {
         });
         // 路由插件可以调用 host.model/host.affinity；仅这条扩展路径必须在首次 RPC
         // 前取得父 Key 准入。无策略的原生路由仍保持“先路由、后准入”的既有顺序。
-        let mut start_guard = if request_policy.is_some() {
-            Some(
-                self.prepare_execution_start(&request, &request_id, &mut authorization)
-                    .await?,
-            )
-        } else {
-            None
-        };
+        let mut start_guard = None;
         let request_observation = self.request_observers.as_ref().and_then(|observers| {
             let generation = request.client.snapshot.extensions()?.clone();
             let plan = observers.resolve(&generation)?;
@@ -1055,10 +1003,12 @@ impl DefaultExecutionService {
             ))
         });
         let budget_key_id = request.client.policy.key_id().clone();
+        let mut entered_execution = false;
         let result = async {
-            let mut routing_context = self
-                .route_context(authorization.account_scope.provider_kinds())
-                .await?;
+            if request_policy.is_some() {
+                start_guard = Some(self.prepare_execution_start(&request, &request_id, &mut authorization).await?);
+            }
+            let mut routing_context = RoutingContext::default();
             if let Some(provider) = authorization.required_provider.clone() {
                 if !authorization.account_scope.provider_kinds().contains(&provider) {
                     return Err(GatewayError::new(
@@ -1217,6 +1167,7 @@ impl DefaultExecutionService {
                         request.metadata.transport,
                     )
                     .with_extension_scope(authorization.extension_scope.clone());
+            entered_execution = true;
             self.start_without_continuation(
                 request,
                 PreparedExecutionStart {
@@ -1233,6 +1184,27 @@ impl DefaultExecutionService {
             .await
         }
         .await;
+        if !entered_execution && let Err(error) = &result {
+            tracing::warn!(
+                request_id = request_id.as_str(),
+                key_id = budget_key_id.as_str(),
+                failure_kind = error.kind().as_str(),
+                "请求在路由或准入阶段被拒绝"
+            );
+            let rejection = super::EntryRejection {
+                request_id: request_id.clone(),
+                client_key_id: budget_key_id.clone(),
+                error: error.clone(),
+                latency: started_at.elapsed().unwrap_or_default(),
+            };
+            let write = self.observations.record_entry_rejection(rejection).fuse();
+            let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
+            pin_mut!(write, timeout);
+            select_biased! {
+                result = write => { if result.is_err() { tracing::warn!("入口拒绝观测写入失败"); } },
+                _ = timeout => tracing::warn!("入口拒绝观测写入超时"),
+            }
+        }
         if let (Some(observation), Err(error)) = (&request_observation, &result) {
             observation.reject(error);
         }
@@ -1438,7 +1410,6 @@ impl DefaultExecutionService {
                 core,
                 admission,
                 active_request,
-                Arc::clone(&self.circuits),
                 Arc::clone(&self.continuation),
                 self.budget.clone(),
             )),
@@ -1864,48 +1835,6 @@ impl DefaultExecutionService {
         }
     }
 
-    async fn route_context(
-        &self,
-        provider_kinds: &BTreeSet<ProviderKind>,
-    ) -> Result<RoutingContext, GatewayError> {
-        let decisions = futures::future::join_all(provider_kinds.iter().map(|provider_kind| {
-            let circuits = Arc::clone(&self.circuits);
-            async move {
-                let decision = circuits.decision(provider_kind).fuse();
-                let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
-                pin_mut!(decision, timeout);
-                let decision = select_biased! {
-                    result = decision => Some(result),
-                    _ = timeout => None,
-                };
-                (provider_kind, decision)
-            }
-        }))
-        .await;
-        let mut blocked_providers = BTreeSet::new();
-        for (provider_kind, decision) in decisions {
-            match decision {
-                Some(Ok(ProviderCircuitDecision::BlockedUntil(_))) => {
-                    blocked_providers.insert(provider_kind.clone());
-                }
-                Some(Err(error)) => tracing::warn!(
-                    provider = provider_kind.as_str(),
-                    %error,
-                    "Provider circuit 读取失败，按可重建协调状态 fail-open"
-                ),
-                None => tracing::warn!(
-                    provider = provider_kind.as_str(),
-                    "Provider circuit 读取超时，按可重建协调状态 fail-open"
-                ),
-                Some(Ok(ProviderCircuitDecision::Allow)) => {}
-            }
-        }
-        Ok(RoutingContext {
-            required_provider: None,
-            blocked_providers,
-        })
-    }
-
     async fn probe_inner(
         &self,
         request: AccountProbeRequest,
@@ -2004,11 +1933,6 @@ impl DefaultExecutionService {
             }
         };
         let events = session.collect_uncommitted().await;
-        publish_provider_attempt_outcomes(
-            self.circuits.as_ref(),
-            session.provider_attempt_outcomes(),
-        )
-        .await;
         let events = match events {
             Ok(events) => events,
             Err(error) => {
@@ -2531,9 +2455,7 @@ struct DefaultExecutionSession {
     admission: Option<ExecutionAdmission>,
     active_request: Option<ActiveRequestLease>,
     cleanup: Option<BoxFuture<'static, ()>>,
-    circuits: Arc<dyn ProviderCircuitPort>,
     continuation: Arc<dyn NativeContinuationPort>,
-    observed_provider_outcomes: usize,
     continuation_recorded: bool,
     budget: Option<Arc<dyn ClientBudgetPort>>,
 }
@@ -2543,7 +2465,6 @@ impl DefaultExecutionSession {
         core: ResponseExecutionSession<dyn ExecutionStore>,
         admission: ExecutionAdmission,
         active_request: Option<ActiveRequestLease>,
-        circuits: Arc<dyn ProviderCircuitPort>,
         continuation: Arc<dyn NativeContinuationPort>,
         budget: Option<Arc<dyn ClientBudgetPort>>,
     ) -> Self {
@@ -2552,9 +2473,7 @@ impl DefaultExecutionSession {
             admission: Some(admission),
             active_request,
             cleanup: None,
-            circuits,
             continuation,
-            observed_provider_outcomes: 0,
             continuation_recorded: false,
             budget,
         }
@@ -2584,16 +2503,6 @@ impl DefaultExecutionSession {
         }
     }
 
-    async fn observe_provider_outcomes(&mut self) {
-        let outcomes = self.core.provider_attempt_outcomes();
-        let new_outcomes = outcomes
-            .get(self.observed_provider_outcomes..)
-            .unwrap_or_default()
-            .to_vec();
-        self.observed_provider_outcomes = outcomes.len();
-        publish_provider_attempt_outcomes(self.circuits.as_ref(), &new_outcomes).await;
-    }
-
     async fn record_continuation(&mut self, state: Option<&ProviderSessionState>) {
         if self.continuation_recorded {
             return;
@@ -2612,7 +2521,6 @@ impl DefaultExecutionSession {
         if let Err(error) = self.core.cancel_and_finalize().await {
             tracing::warn!(%error, "Detached execution 终态收敛失败");
         }
-        self.observe_provider_outcomes().await;
         self.settle_if_finalized().await;
     }
 }
@@ -2634,7 +2542,6 @@ impl ExecutionSession for DefaultExecutionSession {
             if let Ok(Some(event)) = result.as_ref() {
                 self.record_continuation(event.session_update()).await;
             }
-            self.observe_provider_outcomes().await;
             self.settle_if_finalized().await;
             result
         })
@@ -2647,7 +2554,6 @@ impl ExecutionSession for DefaultExecutionSession {
                 let state = events.iter().find_map(ProviderEvent::session_update);
                 self.record_continuation(state).await;
             }
-            self.observe_provider_outcomes().await;
             self.settle_if_finalized().await;
             result
         })
@@ -2671,7 +2577,6 @@ impl ExecutionSession for DefaultExecutionSession {
     ) -> BoxFuture<'_, Result<(), EngineError>> {
         Box::pin(async move {
             let result = self.core.commit_downstream(client_status_code).await;
-            self.observe_provider_outcomes().await;
             self.settle_if_finalized().await;
             result
         })
@@ -2683,7 +2588,6 @@ impl ExecutionSession for DefaultExecutionSession {
     ) -> BoxFuture<'_, Result<(), EngineError>> {
         Box::pin(async move {
             let result = self.core.record_client_status(client_status_code).await;
-            self.observe_provider_outcomes().await;
             self.settle_if_finalized().await;
             result
         })
@@ -2702,39 +2606,6 @@ impl ExecutionSession for DefaultExecutionSession {
 
     fn detach_finalize(mut self: Box<Self>) -> BoxFuture<'static, ()> {
         Box::pin(async move { self.finalize_detached().await })
-    }
-}
-
-#[must_use]
-pub const fn provider_failure_affects_circuit(error_kind: ProviderErrorKind) -> bool {
-    matches!(
-        error_kind,
-        ProviderErrorKind::Timeout
-            | ProviderErrorKind::Transport
-            | ProviderErrorKind::Protocol
-            | ProviderErrorKind::Unavailable
-    )
-}
-
-async fn publish_provider_attempt_outcomes(
-    circuits: &dyn ProviderCircuitPort,
-    outcomes: &[ProviderAttemptOutcome],
-) {
-    for outcome in outcomes {
-        let result = match outcome.error_kind() {
-            None => circuits.observe_success(outcome.provider_kind()).await,
-            Some(kind) if provider_failure_affects_circuit(kind) => {
-                circuits.observe_failure(outcome.provider_kind()).await
-            }
-            Some(_) => continue,
-        };
-        if let Err(error) = result {
-            tracing::warn!(
-                provider = outcome.provider_kind().as_str(),
-                %error,
-                "Provider circuit feedback 写入失败，数据面不受影响"
-            );
-        }
     }
 }
 

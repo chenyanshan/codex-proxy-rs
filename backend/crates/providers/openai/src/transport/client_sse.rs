@@ -64,6 +64,7 @@ impl CodexBackendClient {
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
+            connection_budget: None,
             direct_client: client.clone(),
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
@@ -134,7 +135,8 @@ impl CodexBackendClient {
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
         trace.capture("upstream.request.body", &body);
-        let mut outbound = self.client.post(endpoint).headers(headers);
+        let client = self.http_opening_client()?;
+        let mut outbound = client.post(endpoint).headers(headers);
         let body = if self.protocol == OpenAiUpstreamProtocol::Codex {
             outbound = outbound.header(CONTENT_ENCODING, HeaderValue::from_static("zstd"));
             zstd::stream::encode_all(std::io::Cursor::new(body), 3)
@@ -282,6 +284,7 @@ impl CodexBackendClient {
         )
         .map_err(CodexClientError::WebSocketEncode)?;
         websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
+        websocket_create.connection.connection_budget = self.connection_budget.clone();
         context.trace.cloned().unwrap_or_default().headers(
             "upstream.request.headers",
             serde_json::json!({"transport": "websocket", "phase": "prepared_opening"}),

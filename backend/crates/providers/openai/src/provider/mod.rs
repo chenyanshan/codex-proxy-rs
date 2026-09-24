@@ -482,23 +482,34 @@ impl Provider for CodexProvider {
                 )
             });
         let selection_started_at = Instant::now();
-        let lease = self
-            .selector
-            .select_with_cyber_policy(
-                &SelectCodexCredential {
-                    upstream_model: upstream_model.as_str(),
-                    request_url: &self.responses_url,
-                    attempt: &context,
-                    session_affinity_key: selection_session_affinity
-                        .as_ref()
-                        .map(|affinity| affinity.key()),
-                },
-                selection_cyber_policy_key.as_ref(),
-                selection_session_affinity.as_ref(),
-                requires_websocket,
-            )
-            .await
-            .map_err(map_selection_error)?;
+        let selection = async {
+            self.selector
+                .select_with_cyber_policy(
+                    &SelectCodexCredential {
+                        upstream_model: upstream_model.as_str(),
+                        request_url: &self.responses_url,
+                        attempt: &context,
+                        session_affinity_key: selection_session_affinity
+                            .as_ref()
+                            .map(|affinity| affinity.key()),
+                    },
+                    selection_cyber_policy_key.as_ref(),
+                    selection_session_affinity.as_ref(),
+                    requires_websocket,
+                )
+                .await
+                .map_err(map_selection_error)
+        };
+        // 恢复期间排队也消耗启动窗口；只包住选账号，不限制业务响应时长。
+        let lease = if let Some(remaining) = context.connection_budget().startup_remaining() {
+            tokio::time::timeout(remaining, selection)
+                .await
+                .map_err(|_| {
+                    provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent)
+                })??
+        } else {
+            selection.await?
+        };
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
@@ -787,6 +798,7 @@ impl CodexProvider {
                     provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
                 })?
                 .with_authentication(lease.authentication())
+                .with_connection_budget(context.connection_budget().clone())
                 .with_middleware_headers(middleware_headers),
             response_origin: self.responses_url.clone(),
             request: upstream_request,

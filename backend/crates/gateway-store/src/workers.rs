@@ -9,10 +9,9 @@ pub(crate) struct CommandStoreWriters {
     pub(crate) execution: postgres::ExecutionObservationWriter<postgres::PgExecutionStore>,
     pub(crate) client_key_usage: postgres::PgClientApiKeyUsageWriter,
     pub(crate) admission_release: redis::ClientAdmissionReleaseWriter,
-    pub(crate) circuit_feedback: redis::ProviderCircuitFeedbackWriter,
 }
 
-/// 短生命周期 CLI 只运行数据面必需的四个写泵，不注册恢复、保留或维护 Worker。
+/// 短生命周期 CLI 只运行数据面必需的三个写泵，不注册恢复、保留或维护 Worker。
 pub struct CommandStoreDrain {
     cancellation: gateway_core::lifecycle::CancellationToken,
     tasks: Vec<tokio::task::JoinHandle<Result<(), WorkerTaskError>>>,
@@ -30,14 +29,12 @@ impl CommandStoreWriters {
             execution,
             client_key_usage,
             admission_release,
-            circuit_feedback,
         } = self;
         let execution_idle = execution.idle();
         let tasks = vec![
             spawn_command_writer(execution, cancellation.child_token()),
             spawn_command_writer(client_key_usage, cancellation.child_token()),
             spawn_command_writer(admission_release, cancellation.child_token()),
-            spawn_command_writer(circuit_feedback, cancellation.child_token()),
         ];
         CommandStoreDrain {
             cancellation,
@@ -102,7 +99,6 @@ pub(crate) fn store_worker_contributions(
     execution_writer: postgres::ExecutionObservationWriter<postgres::PgExecutionStore>,
     client_key_usage_writer: postgres::PgClientApiKeyUsageWriter,
     admission_release_writer: redis::ClientAdmissionReleaseWriter,
-    circuit_feedback_writer: redis::ProviderCircuitFeedbackWriter,
     retention: Arc<postgres::PgRetentionRepository>,
 ) -> StoreResult<Vec<WorkerContribution>> {
     let stale_id = WorkerId::try_new(WorkerKind::StaleModelRequestRecovery, "postgres")
@@ -115,8 +111,6 @@ pub(crate) fn store_worker_contributions(
         WorkerId::try_new(WorkerKind::OpsFlush, "postgres_client_key_usage")
             .map_err(worker_definition_error)?;
     let admission_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_admission")
-        .map_err(worker_definition_error)?;
-    let circuit_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_circuit")
         .map_err(worker_definition_error)?;
     let ops_flush_restart =
         DaemonRestartPolicy::try_new(Duration::from_secs(1), Duration::from_secs(60))
@@ -158,16 +152,6 @@ pub(crate) fn store_worker_contributions(
                 WorkerRunnable::Daemon {
                     restart: ops_flush_restart,
                     task: Box::new(admission_release_writer),
-                },
-            )
-            .map_err(worker_definition_error)?,
-        ),
-        WorkerContribution::Registration(
-            WorkerRegistration::try_new(
-                circuit_flush_id,
-                WorkerRunnable::Daemon {
-                    restart: ops_flush_restart,
-                    task: Box::new(circuit_feedback_writer),
                 },
             )
             .map_err(worker_definition_error)?,

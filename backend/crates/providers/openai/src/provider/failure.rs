@@ -810,7 +810,15 @@ pub(super) fn map_client_error(
     uncertain_state: UpstreamSendState,
     observe_transport: bool,
 ) -> MappedProviderFailure {
-    let diagnostic = client_diagnostic(&error);
+    let local_connection_capacity = crate::transport::connection::is_admission_failure(&error);
+    let diagnostic = if local_connection_capacity {
+        Some(
+            ProviderDiagnostic::new("OpenAI local connection capacity unavailable")
+                .with_classification("admission", "local_connection_capacity"),
+        )
+    } else {
+        client_diagnostic(&error)
+    };
     let raw_upstream_error = match &error {
         CodexClientError::WebSocket(error) => websocket_raw_error(error),
         _ => None,
@@ -850,7 +858,13 @@ pub(super) fn map_client_error(
     if let Some(failure) = error.upstream_failure() {
         return map_upstream_failure(failure, observation, ReplayBoundary::BeforeSemanticOutput);
     }
+    let connect_retry =
+        matches!(&error, CodexClientError::Http(error) if transient_http_connect(error));
     let mut failure = match error {
+        CodexClientError::ConnectionBudgetExhausted => MappedProviderFailure::plain(
+            provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent)
+                .with_connection_retry(gateway_core::engine::AttemptTransport::Fallback),
+        ),
         CodexClientError::Upstream { .. } => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Protocol,
             UpstreamSendState::Sent,
@@ -963,6 +977,17 @@ pub(super) fn map_client_error(
             failure
         }
     };
+    if local_connection_capacity {
+        failure.error = provider_error(
+            ProviderErrorKind::ProviderInfrastructureUnavailable,
+            UpstreamSendState::NotSent,
+        );
+    }
+    if connect_retry {
+        failure.error = failure
+            .error
+            .with_connection_retry(gateway_core::engine::AttemptTransport::Fallback);
+    }
     if let Some(continuation_failure) = continuation_failure {
         failure.error = failure
             .error
@@ -989,6 +1014,11 @@ pub(super) fn map_client_error(
 /// 在消费 transport 错误前提取可持久化事实，不能使用可能携带 URL/凭据的 Display。
 fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
     let (stage, code, message) = match error {
+        CodexClientError::ConnectionBudgetExhausted => (
+            "connect",
+            "connection_budget_exhausted",
+            "OpenAI connection recovery budget exhausted".to_owned(),
+        ),
         CodexClientError::WebSocket(error) => return Some(websocket_diagnostic(error)),
         CodexClientError::ErrorBodyRead { status, source, .. } => {
             return Some(
@@ -1560,4 +1590,29 @@ pub(super) fn remaining(deadline: SystemTime) -> Option<Duration> {
         .duration_since(SystemTime::now())
         .ok()
         .filter(|remaining| !remaining.is_zero())
+}
+
+/// 只恢复明确未发送的 HTTP 建连失败；已知 TLS/配置错误不反复尝试同一路径。
+fn transient_http_connect(error: &reqwest::Error) -> bool {
+    if !error.is_connect() || error.is_builder() {
+        return false;
+    }
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if cause.is::<native_tls::Error>() || cause.is::<rustls::Error>() {
+            return false;
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>()
+            && matches!(
+                io.kind(),
+                std::io::ErrorKind::PermissionDenied
+                    | std::io::ErrorKind::InvalidInput
+                    | std::io::ErrorKind::InvalidData
+            )
+        {
+            return false;
+        }
+        source = cause.source();
+    }
+    true
 }

@@ -66,6 +66,7 @@ impl CodexWebSocketConnection {
             endpoint,
             headers,
             outbound_proxy: None,
+            connection_budget: None,
         }
     }
 
@@ -167,7 +168,24 @@ async fn connect_websocket(
             )))
         })?
         .map(Connector::Rustls);
-    let result = timeout(WEBSOCKET_CONNECT_TIMEOUT, async {
+    let remaining = connection
+        .connection_budget
+        .as_ref()
+        .map(|budget| budget.begin())
+        .transpose()
+        .map_err(|error| {
+            CodexWebSocketExchangeError::Connect(tungstenite::Error::Io(std::io::Error::other(
+                error,
+            )))
+        })?
+        .flatten();
+    let connect_timeout = remaining.map_or(WEBSOCKET_CONNECT_TIMEOUT, |remaining| {
+        remaining.min(WEBSOCKET_CONNECT_TIMEOUT)
+    });
+    let result = timeout(connect_timeout, async {
+        let _permit = crate::transport::connection::acquire()
+            .await
+            .map_err(tungstenite::Error::Io)?;
         // Preserve the native direct handshake; explicit egress never inherits a global proxy.
         if connection.outbound_proxy.is_none()
             && matches!(
@@ -202,7 +220,7 @@ async fn connect_websocket(
     })
     .await
     .map_err(|_| CodexWebSocketExchangeError::ConnectTimeout {
-        timeout: WEBSOCKET_CONNECT_TIMEOUT,
+        timeout: connect_timeout,
     })?;
     match result {
         Ok((websocket, response)) => Ok((websocket, response)),
@@ -273,7 +291,6 @@ async fn dial_account(
     tokio_tungstenite::proxy::connect_via_proxy(BufWriter::new(stream), &config, &target, port)
         .await
         .map(BufWriter::into_inner)
-        .map_err(|_| invalid())
 }
 
 async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tungstenite::Error> {

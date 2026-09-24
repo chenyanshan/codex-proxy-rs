@@ -760,6 +760,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 return;
             }
         };
+        context.connection_budget().complete();
         if !accepts_backend_transport(transport_policy, response.transport) {
             let failure = MappedProviderFailure::plain(provider_error(
                 ProviderErrorKind::Protocol,

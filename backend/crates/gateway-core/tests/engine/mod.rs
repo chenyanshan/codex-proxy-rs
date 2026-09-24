@@ -1,4 +1,5 @@
 mod admission;
+mod connection;
 mod continuation;
 mod coordinator;
 mod execution;
