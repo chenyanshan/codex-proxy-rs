@@ -176,7 +176,14 @@ async fn plugin_migration_preserves_main_settings_and_accepts_new_installations(
             .fetch_one(&database.pool)
             .await
             .unwrap();
-    assert_eq!(after, before);
+    // 后续迁移可以新增设置列，插件升级不能修改升级前已有列的值。
+    for (key, value) in before.as_object().unwrap() {
+        assert_eq!(
+            after.get(key.as_str()),
+            Some(value),
+            "plugin migration changed runtime_settings.{key}"
+        );
+    }
     let store = PgPluginStore::new(database.pool.clone());
     store
         .install_artifact(
