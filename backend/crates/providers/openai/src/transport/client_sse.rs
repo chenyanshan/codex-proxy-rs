@@ -607,12 +607,11 @@ async fn await_websocket_delivery_boundary(
             }
             Some(Err(error)) => return Err(error),
             None => {
-                return Err(CodexWebSocketExchangeError::closed_before_terminal_on(
-                    exchange.websocket_connection_id,
-                    None,
-                    None,
-                    None,
-                ));
+                return Err(CodexWebSocketExchangeError::StreamEndedBeforeTerminal {
+                    reason: "stream_eof",
+                    timeout: None,
+                    last_event_type: None,
+                });
             }
         }
     }
