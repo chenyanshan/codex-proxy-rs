@@ -6,6 +6,9 @@ use gateway_protocol::openai::sse::SseError;
 use thiserror::Error;
 use uuid::Uuid;
 
+/// RFC 6455 close code 1009：上游拒收超出大小限制的消息。
+pub(crate) const WEBSOCKET_CLOSE_MESSAGE_TOO_BIG: u16 = 1009;
+
 use crate::transport::client::CodexClientVisibleUpstreamResponse;
 use crate::transport::diagnostics::CodexUpstreamDiagnostics;
 use crate::transport::diagnostics::CodexUpstreamSendPhase;

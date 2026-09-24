@@ -3592,7 +3592,9 @@ async fn websocket_close_after_delivery_preserves_details_and_reconnects_through
 
     assert!(!format!("{error:?}").contains("message too big"));
     assert!(!error.to_string().contains("message too big"));
-    assert_eq!(error.kind(), ProviderErrorKind::Transport);
+    // 上游 close 1009 是 RFC 6455 "message too big"：必须归因为请求自身问题，
+    // 而不是 provider 传输故障（否则会被熔断器和换号逻辑误伤其他请求）。
+    assert_eq!(error.kind(), ProviderErrorKind::MessageTooBig);
     assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
     assert!(
         !error.allows_pre_delivery_retry(),
@@ -3602,8 +3604,8 @@ async fn websocket_close_after_delivery_preserves_details_and_reconnects_through
         .client_visible_upstream_error()
         .expect("WebSocket close detail");
     assert_eq!(detail.message(), "message too big");
-    assert_eq!(detail.code(), Some("1009"));
-    assert_eq!(detail.error_type(), Some("websocket_close_error"));
+    assert_eq!(detail.code(), Some("message_too_big"));
+    assert_eq!(detail.error_type(), Some("invalid_request_error"));
     assert_eq!(
         error.upstream_code().map(|code| code.as_str()),
         Some("websocket_close_1009")

@@ -1244,6 +1244,22 @@ pub(super) fn websocket_client_visible_error(
         ));
     }
     let close = error.close_before_terminal()?;
+    // RFC 6455 1009 = message too big：客户端必须能识别并缩小/重建请求，
+    // 因此投影成结构化的 invalid_request_error/message_too_big，而不是裸 close 码。
+    if close.code() == Some(WEBSOCKET_CLOSE_MESSAGE_TOO_BIG) {
+        let message = close
+            .reason()
+            .filter(|reason| !reason.is_empty())
+            .map_or_else(
+                || "upstream websocket message too big".to_owned(),
+                str::to_owned,
+            );
+        return Some(ClientVisibleUpstreamError::new(
+            message,
+            Some("message_too_big".to_owned()),
+            Some("invalid_request_error".to_owned()),
+        ));
+    }
     let message = close
         .reason()
         .filter(|reason| !reason.is_empty())
@@ -1505,11 +1521,24 @@ pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> Provi
         CodexWebSocketExchangeError::ConnectionLimitReached(_) => ProviderErrorKind::RateLimited,
         CodexWebSocketExchangeError::Transport(_)
         | CodexWebSocketExchangeError::Connect(_)
-        | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
-        | CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
         | CodexWebSocketExchangeError::StreamEndedBeforeTerminal { .. }
         | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. } => {
             ProviderErrorKind::Transport
+        }
+        // 上游 close 1009 是 RFC 6455 的 "message too big"：请求自身超出上游
+        // WS 消息上限。换账号或熔断 Provider 都无法让该请求成功，必须让客户端
+        // 感知到可行动的 message_too_big 语义，且不得计入 provider 熔断。
+        // live 流错误会先被 post_send_ambiguous 包装，需从 source 解出 close 码。
+        CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
+        | CodexWebSocketExchangeError::PostSendAmbiguous { .. } => {
+            if error
+                .close_before_terminal()
+                .is_some_and(|close| close.code() == Some(WEBSOCKET_CLOSE_MESSAGE_TOO_BIG))
+            {
+                ProviderErrorKind::MessageTooBig
+            } else {
+                ProviderErrorKind::Transport
+            }
         }
         CodexWebSocketExchangeError::ConnectionObserved { .. } => {
             unreachable!("classified websocket errors never retain observation wrappers")

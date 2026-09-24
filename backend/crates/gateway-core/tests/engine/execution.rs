@@ -2832,6 +2832,10 @@ fn only_provider_attributable_failures_should_affect_circuit() {
     assert!(!provider_failure_affects_circuit(
         ProviderErrorKind::UpstreamCapacityUnavailable
     ));
+    // 上游 close 1009（message too big）是请求自身的问题：不得熔断 provider。
+    assert!(!provider_failure_affects_circuit(
+        ProviderErrorKind::MessageTooBig
+    ));
 }
 
 #[test]
