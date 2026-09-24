@@ -109,7 +109,6 @@ impl Environment {
                     name: format!("fixture {id}"),
                     label: None,
                     group_ids,
-                    seat_id: None,
                     limits,
                     budget: ClientBudgetLimits::default(),
                     plaintext: plaintext.to_owned(),

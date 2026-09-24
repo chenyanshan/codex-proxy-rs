@@ -151,7 +151,6 @@ impl fmt::Debug for ClientKeySecret {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateClientKey {
     pub request_profile_overrides: ProviderRequestProfileOverrides,
-    pub seat_id: Option<gateway_core::policy::SeatId>,
     pub custom_key: Option<PlaintextClientApiKey>,
     pub name: String,
     pub label: Option<String>,
@@ -164,7 +163,6 @@ pub struct CreateClientKey {
 #[derive(Clone, PartialEq, Eq)]
 pub struct NewClientKey {
     pub request_profile_overrides: ProviderRequestProfileOverrides,
-    pub seat_id: Option<gateway_core::policy::SeatId>,
     pub id: ClientApiKeyId,
     pub name: String,
     pub label: Option<String>,

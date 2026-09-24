@@ -23,7 +23,6 @@ use gateway_admin::{
             DeleteClientKey, NewClientKey, ResetClientKeyBudget, SetClientKeyEnabled,
             SortDirection as AdminSortDirection, UpdateClientKey as AdminUpdateClientKey,
         },
-        key_usage::SeatKeyUsage,
     },
     ports::store::{AdminStoreResult, ClientKeyStore},
 };
@@ -38,7 +37,7 @@ use gateway_core::{
     task::{DaemonTask, WorkerTaskError},
 };
 use serde::Deserialize;
-use sqlx::{PgPool, Postgres, QueryBuilder, Row as _, Transaction};
+use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 use tokio::sync::Notify;
 
 use crate::{
@@ -54,7 +53,6 @@ const CLIENT_API_KEY_LAST_USED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientApiKeySnapshot {
-    pub seat_id: Option<gateway_core::policy::SeatId>,
     pub request_profiles: std::collections::BTreeMap<
         gateway_core::routing::ProviderKind,
         gateway_core::account::OpaqueProviderData,
@@ -75,7 +73,6 @@ impl ClientApiKeySnapshot {
     ) -> StoreResult<Self> {
         Ok(Self {
             request_profiles: std::collections::BTreeMap::new(),
-            seat_id: None,
             id: ClientApiKeyId::new(id).map_err(|_| invalid("persisted key ID is invalid"))?,
             plaintext_key: PlaintextClientApiKey::new(key)
                 .map_err(|_| invalid("persisted plaintext key is invalid"))?,
@@ -277,7 +274,6 @@ pub struct ClientApiKeyPage {
 #[derive(Clone)]
 pub struct NewClientApiKey {
     pub request_profile_overrides: BTreeMap<ProviderKind, OpaqueProviderData>,
-    pub seat_id: Option<String>,
     pub id: String,
     pub name: String,
     pub label: Option<String>,
@@ -381,7 +377,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
                     k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
                     k.updated_at, '[]'::jsonb as groups, '{}'::text[] as provider_kinds
              from client_api_keys k
-             where k.revoked_at is null",
+             where true",
         );
         push_client_key_search(&mut statement, query.search.as_deref());
         if let Some(cursor) = &query.cursor {
@@ -423,7 +419,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         require_nonempty(ENTITY, "id", id)?;
         sqlx::query_as::<_, (String, String, bool, i64, i64)>(
             "select id, key, enabled, max_concurrency, requests_per_minute
-             from client_api_keys where id = $1 and revoked_at is null",
+             from client_api_keys where id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -443,7 +439,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
                     case
                       when groups.binding_count = 0 then coalesce(
                         (select array_agg(distinct a.provider_kind order by a.provider_kind)
-                         from provider_accounts a where not exists (select 1 from account_group_accounts ga join account_groups g on g.id = ga.account_group_id where ga.provider_account_id = a.id and g.is_car)),
+                         from provider_accounts a),
                         '{}'
                       )
                       else coalesce(groups.provider_kinds, '{}')
@@ -452,22 +448,22 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
              left join lateral (
                select
                  (select count(*)::bigint
-                  from client_key_effective_groups kg
+                  from client_api_key_groups kg
                   where kg.client_api_key_id = k.id) as binding_count,
                  (select jsonb_agg(jsonb_build_object(
                            'id', g.id, 'name', g.name, 'color', g.color, 'enabled', g.enabled
                          ) order by g.id)
-                  from client_key_effective_groups kg
+                  from client_api_key_groups kg
                   join account_groups g on g.id = kg.account_group_id
                   where kg.client_api_key_id = k.id) as groups,
                  (select array_agg(distinct a.provider_kind order by a.provider_kind)
-                  from client_key_effective_groups kg
+                  from client_api_key_groups kg
                   join account_groups g on g.id = kg.account_group_id and g.enabled
                   join account_group_accounts gm on gm.account_group_id = g.id
                   join provider_accounts a on a.id = gm.provider_account_id
                   where kg.client_api_key_id = k.id) as provider_kinds
              ) groups on true
-             where k.id = $1 and k.revoked_at is null",
+             where k.id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -712,67 +708,6 @@ impl PgAdminClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for PgAdminClientKeyStore {
-    async fn seat_key_usage(&self, id: &ClientApiKeyId) -> AdminStoreResult<Vec<SeatKeyUsage>> {
-        // 成员明细与共享预算使用同一窗口；等待账号周期确认时保留旧周期费用。
-        // 撤销只影响凭据，不移除历史费用；读取不会推进或清空账务。
-        let rows = sqlx::query("select member.id, member.name, member.revoked_at is not null as revoked,
-            left(member.key, least(10, length(member.key) / 2)) as key_prefix,
-            coalesce(sum(e.amount_usd) filter (where w.daily_end > now() and e.completed_at >= w.daily_start and e.completed_at < w.daily_end), 0)::text as daily_used,
-            coalesce(sum(e.amount_usd) filter (where (g.car_quota_mode = 'active' or w.weekly_end > now()) and e.completed_at >= w.weekly_start and e.completed_at < w.weekly_end), 0)::text as weekly_used
-            from client_api_keys current_key
-            join seats s on s.id = current_key.seat_id
-            join account_groups g on g.id = s.account_group_id
-            join client_api_keys member on member.seat_id = current_key.seat_id
-            left join seat_budget_windows w on w.seat_id = current_key.seat_id
-            left join client_key_charge_events e on e.client_api_key_id = member.id
-                and (e.seat_id = current_key.seat_id or e.seat_id is null)
-                and e.completed_at >= least(w.daily_start, w.weekly_start)
-                and e.completed_at < greatest(w.daily_end, w.weekly_end)
-            where current_key.id = $1 and current_key.enabled and current_key.revoked_at is null
-            group by member.id, member.name, member.key, member.created_at, member.revoked_at
-            order by member.created_at, member.id")
-            .bind(id.as_str()).fetch_all(&self.keys.pool).await
-            .map_err(|error| admin_store_error(ENTITY, StoreError::Unavailable {
-                backend: crate::StoreBackend::PostgreSql,
-                message: format!("load seat key usage: {error}"),
-            }))?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(SeatKeyUsage {
-                    id: ClientApiKeyId::new(row.get::<String, _>("id")).map_err(|_| {
-                        admin_store_error(
-                            ENTITY,
-                            StoreError::InvalidData {
-                                entity: ENTITY,
-                                message: "invalid client key id".to_owned(),
-                            },
-                        )
-                    })?,
-                    name: row.get("name"),
-                    prefix: row.get("key_prefix"),
-                    revoked: row.get("revoked"),
-                    daily_used_usd: row.get::<String, _>("daily_used").parse().map_err(|_| {
-                        admin_store_error(
-                            ENTITY,
-                            StoreError::InvalidData {
-                                entity: ENTITY,
-                                message: "invalid daily usage".to_owned(),
-                            },
-                        )
-                    })?,
-                    weekly_used_usd: row.get::<String, _>("weekly_used").parse().map_err(|_| {
-                        admin_store_error(
-                            ENTITY,
-                            StoreError::InvalidData {
-                                entity: ENTITY,
-                                message: "invalid cycle usage".to_owned(),
-                            },
-                        )
-                    })?,
-                })
-            })
-            .collect()
-    }
     async fn reset_client_key_budget(
         &self,
         command: ResetClientKeyBudget,
@@ -844,7 +779,6 @@ impl ClientKeyStore for PgAdminClientKeyStore {
             .create_client_api_key(
                 NewClientApiKey {
                     request_profile_overrides: command.request_profile_overrides,
-                    seat_id: command.seat_id.map(|id| id.as_str().to_owned()),
                     id: id.as_str().to_owned(),
                     name: command.name,
                     label: command.label,
@@ -1105,8 +1039,8 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     sqlx::query(
         "insert into client_api_keys (
            id, name, label, key, enabled, max_concurrency, requests_per_minute,
-           last_used_at, created_at, updated_at, daily_limit_usd, weekly_limit_usd, provider_request_profiles_json, seat_id
-         ) values ($1, $2, $3, $4, true, $5, $6, null, now(), now(), $7::text::numeric, $8::text::numeric, $9::jsonb, $10)",
+           last_used_at, created_at, updated_at, daily_limit_usd, weekly_limit_usd, provider_request_profiles_json
+         ) values ($1, $2, $3, $4, true, $5, $6, null, now(), now(), $7::text::numeric, $8::text::numeric, $9::jsonb)",
     )
     .bind(&key.id)
     .bind(key.name.trim())
@@ -1117,7 +1051,6 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     .bind(key.budget.daily_usd.canonical())
     .bind(key.budget.weekly_usd.canonical())
     .bind(sqlx::types::Json(request_profile_overrides))
-    .bind(&key.seat_id)
     .execute(&mut **transaction)
     .await
     .map_err(|error| {
@@ -1163,13 +1096,13 @@ pub(crate) async fn update_client_api_key_in_transaction(
         .collect::<BTreeMap<_, _>>();
     let result = sqlx::query(
         "update client_api_keys
-         set name = $2, label = $3, max_concurrency = case when seat_id is null then $4 else max_concurrency end,
+         set name = $2, label = $3, max_concurrency = $4,
              requests_per_minute = $5, updated_at = now(),
-             daily_limit_usd = case when seat_id is null then coalesce($6::text::numeric, daily_limit_usd) else daily_limit_usd end,
-             weekly_limit_usd = case when seat_id is null then coalesce($7::text::numeric, weekly_limit_usd) else weekly_limit_usd end,
+             daily_limit_usd = coalesce($6::text::numeric, daily_limit_usd),
+             weekly_limit_usd = coalesce($7::text::numeric, weekly_limit_usd),
              provider_request_profiles_json = (provider_request_profiles_json - $8::text[])
                  || $9::jsonb
-         where id = $1 and revoked_at is null",
+         where id = $1",
     )
     .bind(&key.id)
     .bind(key.name.trim())
@@ -1196,7 +1129,7 @@ async fn ensure_client_key_name_available(
     // 不回填历史重名数据；创建和保存时统一校验，更新排除当前记录。
     let duplicate: bool = sqlx::query_scalar(
         "select exists(select 1 from client_api_keys
-         where lower(btrim(name)) = lower($1) and id <> $2 and revoked_at is null)",
+         where lower(btrim(name)) = lower($1) and id <> $2)",
     )
     .bind(name)
     .bind(id)
@@ -1220,7 +1153,7 @@ pub(crate) async fn set_client_api_key_enabled_in_transaction(
 ) -> StoreResult<()> {
     require_nonempty(ENTITY, "id", id)?;
     let result =
-        sqlx::query("update client_api_keys set enabled = $2, updated_at = now() where id = $1 and revoked_at is null")
+        sqlx::query("update client_api_keys set enabled = $2, updated_at = now() where id = $1")
             .bind(id)
             .bind(enabled)
             .execute(&mut **transaction)
@@ -1234,14 +1167,7 @@ pub(crate) async fn delete_client_api_key_in_transaction(
     id: &str,
 ) -> StoreResult<()> {
     require_nonempty(ENTITY, "id", id)?;
-    // seat Key 撤销凭据但保留费用明细及在途结算所需的归属。
-    let revoked = sqlx::query("update client_api_keys set enabled = false, revoked_at = now(), updated_at = now() where id = $1 and seat_id is not null and revoked_at is null")
-        .bind(id).execute(&mut **transaction).await
-        .map_err(|_| postgres_unavailable("revoke seat key"))?;
-    if revoked.rows_affected() == 1 {
-        return Ok(());
-    }
-    let result = sqlx::query("delete from client_api_keys where id = $1 and seat_id is null")
+    let result = sqlx::query("delete from client_api_keys where id = $1")
         .bind(id)
         .execute(&mut **transaction)
         .await
@@ -1268,7 +1194,7 @@ async fn replace_client_api_key_groups_in_transaction(
     validate_group_ids(group_ids)?;
     if !group_ids.is_empty() {
         let count = sqlx::query_scalar::<_, i64>(
-            "select count(*)::bigint from account_groups where id = any($1::text[]) and not is_car",
+            "select count(*)::bigint from account_groups where id = any($1::text[])",
         )
         .bind(group_ids)
         .fetch_one(&mut **transaction)
@@ -1423,9 +1349,8 @@ fn client_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<ClientApiK
 }
 
 async fn count_client_api_keys(pool: &PgPool, search: Option<&str>) -> StoreResult<u64> {
-    let mut statement = QueryBuilder::<Postgres>::new(
-        "select count(*)::bigint from client_api_keys where revoked_at is null",
-    );
+    let mut statement =
+        QueryBuilder::<Postgres>::new("select count(*)::bigint from client_api_keys where true");
     push_client_key_search(&mut statement, search);
     let count = statement
         .build_query_scalar::<i64>()
@@ -1466,7 +1391,7 @@ async fn load_client_key_memberships(
          global_providers as (
            select coalesce(array_agg(distinct provider_kind order by provider_kind), '{}')
                     as provider_kinds
-             from provider_accounts a where not exists (select 1 from account_group_accounts ga join account_groups g on g.id = ga.account_group_id where ga.provider_account_id = a.id and g.is_car)
+             from provider_accounts
          )
          select requested_keys.key_id,
                 groups.id as group_id, groups.name as group_name, groups.color as group_color,
@@ -1477,7 +1402,7 @@ async fn load_client_key_memberships(
                   as group_provider_kinds
            from requested_keys
            cross join global_providers
-           left join client_key_effective_groups bindings
+           left join client_api_key_groups bindings
              on bindings.client_api_key_id = requested_keys.key_id
            left join account_groups groups on groups.id = bindings.account_group_id
            left join account_group_accounts memberships

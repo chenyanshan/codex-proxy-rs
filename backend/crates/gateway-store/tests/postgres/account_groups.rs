@@ -379,7 +379,6 @@ fn new_key(id: &str, group_ids: Vec<AccountGroupId>) -> NewClientKey {
     let marker = char::from(id.as_bytes().last().copied().unwrap_or(b'k'));
     NewClientKey {
         request_profile_overrides: Default::default(),
-        seat_id: None,
         budget: Default::default(),
         id: client_key_id(id),
         name: id.to_owned(),

@@ -134,15 +134,9 @@ const {
   connectionTestSelectedModel,
   connectionTestModelOptions,
   connectionTestStatusView,
-  modelAttributionStatus,
-  modelAttributionProgress,
-  modelAttributionResult,
-  modelAttributionError,
-  modelAttributionResponseModels,
   openConnectionTest,
   handleRefreshConnectionTestModels,
   handleTestConnection,
-  handleModelAttribution,
 } = useAccountConnectionTest({ reload: refreshAccountsSilently })
 
 const {
@@ -387,17 +381,11 @@ const {
       :refreshing-models="refreshingConnectionTestModels"
       :logs="connectionTestLogs"
       :model="connectionTestModel"
+      :upstream-response-model="connectionTestUpstreamResponseModel"
       :model-options="connectionTestModelOptions"
       :started-at="connectionTestStartedAt"
       :status="connectionTestStatus"
       :status-view="connectionTestStatusView"
-      :upstream-response-model="connectionTestUpstreamResponseModel"
-      :model-attribution-status="modelAttributionStatus"
-      :model-attribution-progress="modelAttributionProgress"
-      :model-attribution-result="modelAttributionResult"
-      :model-attribution-error="modelAttributionError"
-      :model-attribution-response-models="modelAttributionResponseModels"
-      @attribute="handleModelAttribution()"
       @refresh-models="handleRefreshConnectionTestModels()"
       @test="handleTestConnection()"
     />

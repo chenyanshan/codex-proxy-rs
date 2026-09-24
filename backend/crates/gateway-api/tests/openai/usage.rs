@@ -46,7 +46,6 @@ async fn fixture() -> (AdminTestFixture, Router) {
     key.id = id;
     key.label = Some("private-usage-sentinel".to_owned());
     key.budget = ClientBudgetStatus {
-        seat: None,
         limits: ClientBudgetLimits {
             daily_usd: "1".parse().unwrap(),
             weekly_usd: "5".parse().unwrap(),
@@ -221,7 +220,6 @@ async fn usage_distinguishes_unlimited_and_unused_windows_from_exhausted_budgets
     let (fixture, app) = fixture().await;
     for (daily, weekly) in [("0", "0"), ("1", "0"), ("0", "5")] {
         fixture.client_key.lock().unwrap().as_mut().unwrap().budget = ClientBudgetStatus {
-            seat: None,
             limits: ClientBudgetLimits {
                 daily_usd: daily.parse().unwrap(),
                 weekly_usd: weekly.parse().unwrap(),

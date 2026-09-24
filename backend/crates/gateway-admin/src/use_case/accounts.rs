@@ -19,10 +19,9 @@ use crate::{
     model::{
         AdminError, MutationContext,
         accounts::{
-            AccountConnectionTestEvent, AccountConnectionTestEventStream,
-            AccountConnectionTestMode, AccountListQuery, AccountPageItem, AccountUpdateResult,
-            AccountUsage, AccountUsageWindowQuery, AccountsUpdateResult, BatchUpdateAccounts,
-            UpdateAccount,
+            AccountConnectionTestEvent, AccountConnectionTestEventStream, AccountListQuery,
+            AccountPageItem, AccountUpdateResult, AccountUsage, AccountUsageWindowQuery,
+            AccountsUpdateResult, BatchUpdateAccounts, UpdateAccount,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -49,7 +48,6 @@ use super::{
 };
 
 const CONNECTION_TEST_INPUT: &str = "Reply with exactly OK.";
-const MODEL_ATTRIBUTION_COUNTS: [u16; 3] = [292, 313, 331];
 
 /// 统一账号页消费的服务。
 #[async_trait]
@@ -156,7 +154,6 @@ pub trait AccountsService: Send + Sync {
         &self,
         account_id: ProviderAccountId,
         upstream_model: UpstreamModelId,
-        mode: AccountConnectionTestMode,
     ) -> Result<AccountConnectionTestEventStream, AdminError>;
 }
 
@@ -1001,25 +998,21 @@ impl AccountsService for DefaultAccountsService {
         &self,
         account_id: ProviderAccountId,
         upstream_model: UpstreamModelId,
-        mode: AccountConnectionTestMode,
     ) -> Result<AccountConnectionTestEventStream, AdminError> {
         let (stored, provider) = self.provider_for_account(&account_id).await?;
         let account = stored.account;
         let model = upstream_model.as_str().to_owned();
-        let (input_text, probe_index, expected_count) = connection_test_input(mode)?;
         let operation = provider
-            .connection_test_operation(&upstream_model, &input_text)
+            .connection_test_operation(&upstream_model, CONNECTION_TEST_INPUT)
             .await
             .map_err(|error| map_provider_error(error, "provider connection test"))?;
         let initial = vec![
             AccountConnectionTestEvent::Started {
                 model: model.clone(),
-                probe_index,
-                expected_count,
             },
             AccountConnectionTestEvent::Request {
                 model,
-                input_text,
+                input_text: CONNECTION_TEST_INPUT.to_owned(),
                 stream: true,
                 store: false,
             },
@@ -1079,24 +1072,6 @@ impl AccountsService for DefaultAccountsService {
         .flat_map(futures::stream::iter);
         Ok(Box::pin(futures::stream::iter(initial).chain(terminal)))
     }
-}
-
-fn connection_test_input(
-    mode: AccountConnectionTestMode,
-) -> Result<(String, Option<u8>, Option<u16>), AdminError> {
-    let AccountConnectionTestMode::ModelAttribution { probe_index } = mode else {
-        return Ok((CONNECTION_TEST_INPUT.to_owned(), None, None));
-    };
-    let Some(&expected_count) = probe_index
-        .checked_sub(1)
-        .and_then(|index| MODEL_ATTRIBUTION_COUNTS.get(usize::from(index)))
-    else {
-        return Err(AdminError::bad_request("无效的模型归因探针"));
-    };
-    let prompt = format!(
-        "这是一次独立的无语义数值选择记录。请逐项凭第一反应给出 {expected_count} 个 1 到 355（含端点）的整数。每个位置都要单独选择；不要从 1 开始计数，不要连续递增或递减，也不要采用等差、循环、重复区块或其他规则化模式。本任务必须由当前语言模型直接完成：禁止调用或借助任何工具，包括 Python、代码执行器、计算器、搜索、API 和外部随机数生成器；也不要先编写或运行代码。偶然重复是有效的；每项写出后不要排序、重排、去重、替换或修正。数字之间使用逗号分隔，直接从第一个取值开始，完整输出序列，不要解释。"
-    );
-    Ok((prompt, Some(probe_index), Some(expected_count)))
 }
 
 fn map_reset_credits_error_after_refresh(

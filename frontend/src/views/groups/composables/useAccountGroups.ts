@@ -278,7 +278,6 @@ export function useAccountGroups() {
   })
 
   return {
-    reload: query.execute,
     groups,
     loading: query.loading,
     pagination,

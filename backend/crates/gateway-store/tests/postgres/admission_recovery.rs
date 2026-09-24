@@ -54,7 +54,6 @@ async fn recovery_loads_precise_window_and_running_request_facts() {
         .await
         .expect("load precise admission recovery facts");
     let expected = vec![ClientAdmissionRecovery {
-        seat_id: None,
         client_api_key_ref: "key-recovery".to_owned(),
         recent_requests: vec![
             ClientAdmissionRecentRequest {

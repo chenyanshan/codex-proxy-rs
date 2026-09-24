@@ -26,8 +26,6 @@ export interface KeyUsageMetrics {
 }
 
 export interface KeyUsageBudget {
-  seatName: string | null
-  accountCycle: boolean
   name: string
   prefix: string
   maxConcurrency: number
@@ -40,16 +38,6 @@ export interface KeyUsageBudget {
   weeklyResetsAt: string | null
 }
 
-export interface SeatKeyUsage {
-  id: string
-  name: string
-  prefix: string
-  current: boolean
-  revoked: boolean
-  dailyUsedUsd: string
-  weeklyUsedUsd: string
-}
-
 export interface KeyUsageTrendPoint extends KeyUsageMetrics {
   time: string
   bucketSeconds: number
@@ -60,7 +48,6 @@ export interface KeyUsageOverview {
   startTime: string
   endTime: string
   key: KeyUsageBudget
-  seatKeys: SeatKeyUsage[]
   summary: KeyUsageMetrics
   models: KeyUsageModel[]
   modelsPagination: { currentPage: number, pageSize: number, hasMore: boolean }

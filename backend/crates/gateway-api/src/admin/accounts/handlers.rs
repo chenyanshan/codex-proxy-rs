@@ -628,11 +628,11 @@ async fn test_account_connection<S>(
 where
     S: SessionState + Send + Sync,
 {
-    let (account_id, upstream_model, mode) = query.into_command().map_err(map_wire_error)?;
+    let (account_id, upstream_model) = query.into_command().map_err(map_wire_error)?;
     let stream = state
         .admin_services()
         .accounts()
-        .test_connection(account_id, upstream_model, mode)
+        .test_connection(account_id, upstream_model)
         .await
         .map_err(map_service_error)?
         .map(|event| {

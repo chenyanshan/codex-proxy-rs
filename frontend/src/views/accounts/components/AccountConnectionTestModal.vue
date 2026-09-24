@@ -2,7 +2,7 @@
 import type { useAccountConnectionTest } from '../composables/useAccountConnectionTest'
 
 import { BaseButton, BaseIconButton, BaseModal, BaseSelect } from '@codex-proxy/ui'
-import { Fingerprint, RefreshCw } from '@lucide/vue'
+import { RefreshCw } from '@lucide/vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountStatusBadge from './AccountStatusBadge/index.vue'
 
@@ -12,6 +12,7 @@ defineProps<{
   account: ConnectionTest['testingAccount']['value']
   status: ConnectionTest['connectionTestStatus']['value']
   model: string
+  upstreamResponseModel: string
   logs: ConnectionTest['connectionTestLogs']['value']
   error: string
   startedAt: string
@@ -21,17 +22,10 @@ defineProps<{
   refreshingModels: boolean
   modelOptions: ConnectionTest['connectionTestModelOptions']['value']
   statusView: ConnectionTest['connectionTestStatusView']['value']
-  upstreamResponseModel: string
-  modelAttributionStatus: ConnectionTest['modelAttributionStatus']['value']
-  modelAttributionProgress: number
-  modelAttributionResult: ConnectionTest['modelAttributionResult']['value']
-  modelAttributionError: string
-  modelAttributionResponseModels: string[]
 }>()
 
 const emit = defineEmits<{
   test: []
-  attribute: []
   refreshModels: []
 }>()
 const open = defineModel<boolean>({ default: false })
@@ -45,10 +39,6 @@ function connectionLogClass(tone: string) {
   if (tone === 'info')
     return 'text-cp-info-text'
   return 'text-cp-text-secondary'
-}
-
-function formatPercent(value: number) {
-  return `${(value * 100).toFixed(1)}%`
 }
 </script>
 
@@ -88,7 +78,7 @@ function formatPercent(value: number) {
               size="sm"
               label="刷新上游模型"
               :loading="refreshingModels"
-              :disabled="status === 'running' || modelAttributionStatus === 'running' || loadingModels"
+              :disabled="status === 'running' || loadingModels"
               @click="emit('refreshModels')"
             >
               <template #loading>
@@ -101,7 +91,7 @@ function formatPercent(value: number) {
             v-model="selectedModel"
             aria-label="测试模型"
             :options="modelOptions"
-            :disabled="status === 'running' || modelAttributionStatus === 'running' || loadingModels || refreshingModels"
+            :disabled="status === 'running' || loadingModels || refreshingModels"
             :placeholder="loadingModels ? '加载模型中...' : '选择上游模型'"
             empty-text="上游没有返回模型"
           />
@@ -226,99 +216,6 @@ function formatPercent(value: number) {
           </div>
         </div>
       </section>
-
-      <section class="rounded-cp-card bg-cp-fill-quaternary p-4">
-        <div class="flex items-start gap-3">
-          <span class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-cp-info-container text-cp-info-on-container">
-            <Fingerprint class="size-4.5" />
-          </span>
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p class="m-0 text-cp-sm font-heavy text-cp-text">
-                  主动探测模型归因
-                </p>
-                <p class="mt-1 mb-0 text-cp-xs leading-normal font-emphasis text-cp-text-secondary">
-                  发送 3 次长数字序列探针，与 ModelTrace 指纹库进行闭集相似度比较
-                </p>
-              </div>
-              <span
-                v-if="modelAttributionStatus !== 'idle'"
-                class="inline-flex h-7 items-center rounded-full px-2.5 text-cp-xs font-heavy"
-                :class="modelAttributionStatus === 'success'
-                  ? 'bg-cp-success-container text-cp-success-on-container'
-                  : modelAttributionStatus === 'error'
-                    ? 'bg-cp-error-container text-cp-error-on-container'
-                    : 'bg-cp-info-container text-cp-info-on-container'"
-              >
-                {{ modelAttributionStatus === 'running'
-                  ? `探测中 ${modelAttributionProgress}/3`
-                  : modelAttributionStatus === 'success' ? '归因完成' : '归因失败' }}
-              </span>
-            </div>
-
-            <div v-if="modelAttributionStatus === 'running'" class="mt-3 h-1.5 overflow-hidden rounded-full bg-cp-bg-container">
-              <div
-                class="h-full rounded-full bg-cp-info transition-[width]"
-                :style="{ width: `${(modelAttributionProgress / 3) * 100}%` }"
-              />
-            </div>
-
-            <div v-if="modelAttributionResult" class="mt-3 grid gap-2">
-              <div class="rounded-lg bg-cp-bg-container px-3 py-2.5">
-                <p class="m-0 text-cp-xs font-heavy text-cp-text-quaternary">
-                  最接近候选模型
-                </p>
-                <div class="mt-1.5 flex flex-wrap items-baseline justify-between gap-2">
-                  <p class="m-0 font-mono text-cp-sm font-heavy text-cp-text">
-                    {{ modelAttributionResult.predictionName }}
-                  </p>
-                  <span class="font-mono text-cp-sm font-heavy text-cp-info-text">
-                    {{ formatPercent(modelAttributionResult.probability) }}
-                  </span>
-                </div>
-                <p class="mt-1 mb-0 text-cp-xs font-emphasis text-cp-text-quaternary">
-                  有效探针 {{ modelAttributionResult.usedOutputs }}/3 · 交叉验证准确率 {{ formatPercent(modelAttributionResult.cvAccuracy) }}
-                </p>
-              </div>
-
-              <div
-                v-for="candidate in modelAttributionResult.results.slice(0, 3)"
-                :key="candidate.model"
-                class="grid grid-cols-[minmax(0,1fr)_52px] items-center gap-3"
-              >
-                <div class="min-w-0">
-                  <div class="mb-1 flex items-center justify-between gap-2 text-cp-xs font-emphasis">
-                    <span class="truncate text-cp-text-secondary">{{ candidate.displayName }}</span>
-                    <span class="font-mono text-cp-text-quaternary">{{ formatPercent(candidate.probability) }}</span>
-                  </div>
-                  <div class="h-1.5 overflow-hidden rounded-full bg-cp-bg-container">
-                    <div
-                      class="h-full rounded-full bg-cp-info"
-                      :style="{ width: `${Math.max(candidate.probability * 100, 1)}%` }"
-                    />
-                  </div>
-                </div>
-                <span class="text-right font-mono text-cp-xs text-cp-text-quaternary">
-                  {{ formatPercent(candidate.profileSimilarity) }}
-                </span>
-              </div>
-
-              <p v-if="modelAttributionResponseModels.length" class="m-0 text-cp-xs font-emphasis text-cp-text-secondary">
-                上游自报模型：<span class="font-mono text-cp-text">{{ modelAttributionResponseModels.join(', ') }}</span>
-              </p>
-            </div>
-
-            <p v-if="modelAttributionError" role="alert" class="mt-3 mb-0 text-cp-sm font-emphasis text-cp-error-text">
-              {{ modelAttributionError }}
-            </p>
-
-            <p class="mt-3 mb-0 rounded-cp bg-cp-warning-container px-3 py-2 text-cp-xs leading-normal font-emphasis text-cp-warning-on-container">
-              结果只表示与当前指纹库候选模型的相似度，不是上游身份认证；未收录模型仍会匹配到最接近候选。探测会产生真实请求并消耗额度。
-            </p>
-          </div>
-        </div>
-      </section>
     </div>
 
     <template #footer>
@@ -326,17 +223,9 @@ function formatPercent(value: number) {
         关闭
       </BaseButton>
       <BaseButton
-        variant="secondary"
-        :loading="modelAttributionStatus === 'running'"
-        :disabled="!account || status === 'running' || loadingModels || refreshingModels || !selectedModel"
-        @click="emit('attribute')"
-      >
-        主动探测模型归因
-      </BaseButton>
-      <BaseButton
         variant="primary"
         :loading="status === 'running'"
-        :disabled="!account || modelAttributionStatus === 'running' || loadingModels || refreshingModels || !selectedModel"
+        :disabled="!account || loadingModels || refreshingModels || !selectedModel"
         @click="emit('test')"
       >
         {{ logs.length > 0 || error ? '重新测试' : '开始测试' }}

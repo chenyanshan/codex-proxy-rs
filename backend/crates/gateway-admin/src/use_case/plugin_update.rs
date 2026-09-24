@@ -118,9 +118,7 @@ fn map_store_error(error: crate::ports::store::AdminStoreError) -> SystemOperati
         AdminStoreErrorKind::Invalid | AdminStoreErrorKind::NotFound => {
             conflict("启用插件的制品不完整，无法执行系统更新")
         }
-        AdminStoreErrorKind::CarCapacity | AdminStoreErrorKind::Unavailable => {
-            internal("插件配置暂不可读取")
-        }
+        AdminStoreErrorKind::Unavailable => internal("插件配置暂不可读取"),
     }
 }
 

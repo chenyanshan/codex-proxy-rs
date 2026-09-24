@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import type { ApiKeyFormValue } from '../composables/useApiKeyMutations'
 import type { AccountGroup } from '@/api'
-import { BaseButton, BaseForm, BaseFormItem, BaseIconButton, BaseInput, BaseModal, BaseSelect } from '@codex-proxy/ui'
+import { BaseButton, BaseForm, BaseFormItem, BaseIconButton, BaseInput, BaseModal } from '@codex-proxy/ui'
+
 import { Copy, DollarSign, KeyRound, Upload } from '@lucide/vue'
-import { computed, shallowRef, watch } from 'vue'
-import { getSeats } from '@/api'
+import { computed } from 'vue'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import ProviderRequestProfilesEditor from '@/components/client-profile/ProviderRequestProfilesEditor.vue'
 
@@ -24,26 +24,13 @@ const open = defineModel<boolean>({ default: false })
 const createdOpen = defineModel<boolean>('createdOpen', { default: false })
 const form = defineModel<ApiKeyFormValue>('form', { required: true })
 const title = computed(() => props.editing ? '编辑密钥' : '创建 API Key')
-const seatOptions = shallowRef<{ label: string, value: string }[]>([])
-watch([open, () => props.groups], async ([visible]) => {
-  if (!visible || props.editing)
-    return
-  try {
-    const groups = props.groups.filter(group => group.isCar)
-    const pages = await Promise.all(groups.map(group => getSeats(group.id)))
-    seatOptions.value = [{ label: '独立 Key', value: '' }, ...pages.flatMap((seats, i) => seats.map(seat => ({ label: `${groups[i]!.name} / ${seat.name}`, value: seat.id })))]
-  }
-  catch {
-    seatOptions.value = [{ label: '独立 Key', value: '' }]
-  }
-})
 </script>
 
 <template>
   <BaseModal
     v-model="open"
     :title="title"
-    description="配置密钥信息、归属与使用限制"
+    description="配置密钥信息、分组与使用限制"
     tone="info"
     size="lg"
     :dismissible="!saving"
@@ -86,16 +73,10 @@ watch([open, () => props.groups], async ([visible]) => {
         />
       </BaseFormItem>
 
-      <BaseFormItem v-if="!editing && seatOptions.length > 1" label="归属">
-        <BaseSelect v-model="form.seatId" :options="seatOptions" :disabled="saving" />
-      </BaseFormItem>
-      <p v-if="form.seatId" class="text-cp-sm text-cp-text-secondary">
-        {{ form.seatName || '所选 seat' }} 的费用与并发由成员共享，独立保留客户端身份和 RPM
-      </p>
-      <BaseFormItem v-else label="分组">
+      <BaseFormItem label="分组">
         <AccountGroupCheckboxGrid
           v-model="form.groupIds"
-          :groups="groups.filter(group => !group.isCar)"
+          :groups="groups"
           :loading="groupLoading"
           :disabled="saving"
         />
@@ -111,7 +92,7 @@ watch([open, () => props.groups], async ([visible]) => {
         />
       </BaseFormItem>
 
-      <div v-if="!form.seatId" class="grid gap-6 sm:grid-cols-2">
+      <div class="grid gap-6 sm:grid-cols-2">
         <BaseFormItem label="日限额">
           <BaseInput
             v-model="form.dailyLimitUsd"
@@ -145,7 +126,7 @@ watch([open, () => props.groups], async ([visible]) => {
       </div>
 
       <div class="grid gap-6 sm:grid-cols-2">
-        <BaseFormItem v-if="!form.seatId" label="最大并发">
+        <BaseFormItem label="最大并发">
           <BaseInput
             v-model="form.maxConcurrency"
             type="number"

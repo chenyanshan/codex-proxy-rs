@@ -119,7 +119,6 @@ pub struct ClientAdmissionLimits {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientAdmissionRequest {
-    pub concurrency_ref: String,
     pub model_request_id: String,
     pub client_api_key_ref: String,
     pub lease_ttl: Duration,
@@ -163,7 +162,6 @@ pub struct ClientAdmissionRunningRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientAdmissionRestore {
-    pub concurrency_ref: String,
     pub client_api_key_ref: String,
     pub recent_requests: Vec<ClientAdmissionRecentRequest>,
     pub running_requests: Vec<ClientAdmissionRunningRequest>,
@@ -267,8 +265,7 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
         request: &ClientAdmissionRequest,
     ) -> StoreResult<ClientAdmissionDecision> {
         request.validate()?;
-        let mut keys = self.keys(&request.client_api_key_ref)?;
-        keys[0] = self.keys(&request.concurrency_ref)?[0].clone();
+        let keys = self.keys(&request.client_api_key_ref)?;
         let lease_ttl_ms = u64::try_from(request.lease_ttl.as_millis())
             .map_err(|_| invalid("lease TTL is too large"))?;
         let mut connection = self.connection.clone();
@@ -319,8 +316,7 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
         recovery: &ClientAdmissionRestore,
     ) -> StoreResult<ClientAdmissionRestoreResult> {
         recovery.validate()?;
-        let mut keys = self.keys(&recovery.client_api_key_ref)?;
-        keys[0] = self.keys(&recovery.concurrency_ref)?[0].clone();
+        let keys = self.keys(&recovery.client_api_key_ref)?;
         let script = Script::new(RESTORE_SCRIPT);
         let mut invocation = script.prepare_invoke();
         invocation.key(&keys[0]).key(&keys[1]).arg(redis_len(
@@ -380,7 +376,7 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
 impl ClientAdmissionPort for RedisClientAdmissionRepository {
     fn abandon(
         &self,
-        key: &gateway_core::policy::ClientConcurrencyId,
+        key: &gateway_core::policy::ClientApiKeyId,
         request: &gateway_core::engine::ModelRequestId,
     ) {
         let repository = self.clone();
@@ -401,7 +397,6 @@ impl ClientAdmissionPort for RedisClientAdmissionRepository {
     ) -> futures::future::BoxFuture<'_, Result<CoreAdmissionDecision, CoreAdmissionError>> {
         Box::pin(async move {
             self.admit_client_request(&ClientAdmissionRequest {
-                concurrency_ref: request.concurrency_id.as_str().to_owned(),
                 model_request_id: request.model_request_id.as_str().to_owned(),
                 client_api_key_ref: request.client_api_key_id.as_str().to_owned(),
                 lease_ttl: request.lease_ttl,
@@ -427,7 +422,7 @@ impl ClientAdmissionPort for RedisClientAdmissionRepository {
 
     fn release<'a>(
         &'a self,
-        client_api_key_id: &'a gateway_core::policy::ClientConcurrencyId,
+        client_api_key_id: &'a gateway_core::policy::ClientApiKeyId,
         model_request_id: &'a gateway_core::engine::ModelRequestId,
     ) -> futures::future::BoxFuture<'a, Result<bool, CoreAdmissionError>> {
         Box::pin(async move {
@@ -444,7 +439,6 @@ impl ClientAdmissionPort for RedisClientAdmissionRepository {
     {
         Box::pin(async move {
             self.restore_client_admission(&ClientAdmissionRestore {
-                concurrency_ref: recovery.concurrency_id.as_str().to_owned(),
                 client_api_key_ref: recovery.client_api_key_id.as_str().to_owned(),
                 recent_requests: recovery
                     .recent_requests

@@ -153,7 +153,6 @@ impl ClientKeySort {
 pub struct CreateClientKeyRequest {
     #[serde(default)]
     provider_request_profile_overrides: ProviderRequestProfileOverrides,
-    seat_id: Option<String>,
     openai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
     xai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
     custom_key: Option<String>,
@@ -191,11 +190,6 @@ impl CreateClientKeyRequest {
         )?;
         Ok(CreateClientKey {
             request_profile_overrides,
-            seat_id: self
-                .seat_id
-                .map(gateway_core::policy::SeatId::new)
-                .transpose()
-                .map_err(|_| WireValidationError::new("seatId"))?,
             custom_key: self
                 .custom_key
                 .filter(|key| !key.is_empty())
@@ -340,8 +334,6 @@ impl ClientKeyMutationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ClientKeyView {
     provider_request_profile_overrides: ProviderRequestProfileOverrides,
-    seat_id: Option<String>,
-    seat_name: Option<String>,
     /// 固定兼容字段；值始终从 provider_request_profile_overrides 派生。
     openai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
     /// 固定兼容字段；值始终从 provider_request_profile_overrides 派生。
@@ -415,17 +407,7 @@ impl From<ClientKeyRecord> for ClientKeyView {
                 .collect(),
             prefix: record.prefix,
             enabled: record.enabled,
-            max_concurrency: record
-                .budget
-                .seat
-                .as_ref()
-                .map_or(record.limits.max_concurrency, |s| s.max_concurrency),
-            seat_id: record
-                .budget
-                .seat
-                .as_ref()
-                .map(|s| s.id.as_str().to_owned()),
-            seat_name: record.budget.seat.as_ref().map(|s| s.name.clone()),
+            max_concurrency: record.limits.max_concurrency,
             requests_per_minute: record.limits.requests_per_minute,
             daily_limit_usd: record.budget.limits.daily_usd.canonical(),
             weekly_limit_usd: record.budget.limits.weekly_usd.canonical(),

@@ -16,8 +16,7 @@ use gateway_core::task::{ScheduledTask, WorkerCycleContext, WorkerTaskError};
 use tracing::warn;
 
 use crate::model::accounts::{
-    AccountConnectionTestEvent, AccountConnectionTestMode, AccountFreeze, AccountPageItem,
-    AccountRuntimeSnapshot,
+    AccountConnectionTestEvent, AccountFreeze, AccountPageItem, AccountRuntimeSnapshot,
 };
 use crate::model::{MutationActor, MutationContext};
 use crate::ports::store::{AccountRuntimeStore, AccountStore, SettingsStore};
@@ -194,7 +193,7 @@ impl FreezeRecoveryTask {
         let probe_succeeded = match self
             .deps
             .accounts
-            .test_connection(account.clone(), model, AccountConnectionTestMode::Standard)
+            .test_connection(account.clone(), model)
             .await
         {
             Ok(events) => drain_probe(events).await,

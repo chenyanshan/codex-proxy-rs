@@ -686,9 +686,8 @@ async fn replace_account_group_assignments_in_transaction(
             });
         }
     }
-    sqlx::query("delete from account_group_accounts where provider_account_id = any($1::text[]) and not (account_group_id = any($2::text[]))")
+    sqlx::query("delete from account_group_accounts where provider_account_id = any($1::text[])")
         .bind(account_ids)
-        .bind(&group_ids)
         .execute(&mut **transaction)
         .await
         .map_err(|_| postgres_unavailable("clear account group assignments"))?;
@@ -700,7 +699,7 @@ async fn replace_account_group_assignments_in_transaction(
          (account_group_id, provider_account_id, created_at)
          select group_id, account_id, now()
          from unnest($1::text[]) group_id
-         cross join unnest($2::text[]) account_id on conflict do nothing",
+         cross join unnest($2::text[]) account_id",
     )
     .bind(group_ids)
     .bind(account_ids)
@@ -1035,7 +1034,7 @@ pub(crate) async fn finish_admin_transaction<T>(
             transaction
                 .commit()
                 .await
-                .map_err(|error| super::super::seats::configuration_error(error, operation))?;
+                .map_err(|_| postgres_unavailable(operation))?;
             Ok(value)
         }
         Err(error) => {

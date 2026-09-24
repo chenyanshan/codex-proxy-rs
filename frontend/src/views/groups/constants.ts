@@ -16,7 +16,7 @@ export const ACCOUNT_GROUP_COLOR_PRESETS = [
 
 export const accountGroupColumns = defineTableColumns<AccountGroup>([
   { key: 'selection', kind: 'selection' },
-  { key: 'identity', label: '分组', kind: 'identity' },
+  { key: 'identity', label: '分组', kind: 'identity', size: 'lg' },
   { key: 'color', label: '颜色', kind: 'status', size: 'sm' },
   { key: 'enabled', label: '状态', kind: 'status' },
   { key: 'accountCount', label: '账号数', kind: 'custom' },

@@ -375,7 +375,6 @@ async fn duplicate_names_report_the_same_actionable_conflict_on_create_and_updat
 fn create_command(key: Option<&str>) -> CreateClientKey {
     CreateClientKey {
         request_profile_overrides: Default::default(),
-        seat_id: None,
         custom_key: key.map(|value| PlaintextClientApiKey::new(value).unwrap()),
         name: "Migration".to_owned(),
         label: None,

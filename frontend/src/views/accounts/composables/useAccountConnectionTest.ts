@@ -1,4 +1,3 @@
-import type { ModelAttributionResult } from '../model-attribution/modeltrace'
 import type { Account, AccountModelsResponse } from '@/api'
 import { toast } from '@codex-proxy/ui'
 
@@ -42,8 +41,6 @@ interface ConnectionTestStartEvent {
   type: 'test_start'
   text?: string
   model?: string
-  probeIndex?: number
-  expectedCount?: number
 }
 
 interface ConnectionTestRequestEvent {
@@ -174,11 +171,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   const refreshingConnectionTestModels = computed(() => modelsRequest.loading.value && modelsRequestMode.value === 'refresh')
   const connectionTestSelectedModel = shallowRef('')
   const connectionTestModelOptions = ref<ConnectionTestModelOption[]>([])
-  const modelAttributionStatus = shallowRef<'idle' | 'running' | 'success' | 'error'>('idle')
-  const modelAttributionProgress = shallowRef(0)
-  const modelAttributionResult = shallowRef<ModelAttributionResult | null>(null)
-  const modelAttributionError = shallowRef('')
-  const modelAttributionResponseModels = ref<string[]>([])
   const connectionTestStreamUrl = shallowRef<string>()
   const {
     data: connectionTestStreamMessage,
@@ -197,7 +189,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
 
   let connectionTestStartedAtMs = 0
   let connectionTestRun: ConnectionTestRun | undefined
-  let modelAttributionAbortController: AbortController | undefined
 
   const connectionTestStatusView = computed(() => {
     if (connectionTestStatus.value === 'running') {
@@ -257,16 +248,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     connectionTestFinishedAt.value = ''
     connectionTestDurationMs.value = null
     connectionTestStartedAtMs = 0
-    resetModelAttribution()
-  }
-
-  function resetModelAttribution() {
-    abortModelAttribution()
-    modelAttributionStatus.value = 'idle'
-    modelAttributionProgress.value = 0
-    modelAttributionResult.value = null
-    modelAttributionError.value = ''
-    modelAttributionResponseModels.value = []
   }
 
   function formatConnectionTestDetail(value: unknown) {
@@ -422,123 +403,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     clearConnectionTestRun()
   }
 
-  function abortModelAttribution() {
-    modelAttributionAbortController?.abort()
-    modelAttributionAbortController = undefined
-  }
-
-  function runModelAttributionProbe(
-    accountId: string,
-    modelId: string,
-    probeIndex: number,
-    signal: AbortSignal,
-  ) {
-    return new Promise<{ text: string, expectedCount: number, upstreamResponseModel: string }>((resolve, reject) => {
-      const params = new URLSearchParams({
-        accountId,
-        modelId,
-        attributionProbe: String(probeIndex),
-      })
-      const source = new EventSource(
-        `${API_BASE_URL}/api/admin/accounts/connection-test?${params}`,
-        { withCredentials: true },
-      )
-      let text = ''
-      let expectedCount = 0
-      let upstreamResponseModel = ''
-      let settled = false
-      let finish: (error?: Error) => void
-      const onAbort = () => finish(new DOMException('模型归因已取消', 'AbortError'))
-      finish = (error?: Error) => {
-        if (settled)
-          return
-        settled = true
-        source.close()
-        signal.removeEventListener('abort', onAbort)
-        if (error)
-          reject(error)
-        else
-          resolve({ text, expectedCount, upstreamResponseModel })
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-      source.onmessage = (message) => {
-        try {
-          const event = parseConnectionTestEvent(message.data)
-          if (!event)
-            return
-          if (event.type === 'test_start') {
-            expectedCount = event.expectedCount || 0
-          }
-          else if (event.type === 'content' && event.text) {
-            text += event.text
-          }
-          else if (event.type === 'test_complete') {
-            upstreamResponseModel = event.upstreamResponseModel || ''
-            if (!event.success)
-              finish(new Error(event.error || '主动探测失败'))
-            else if (!expectedCount)
-              finish(new Error('主动探测缺少预期数字数量'))
-            else
-              finish()
-          }
-          else if (event.type === 'error') {
-            finish(new Error(connectionTestFailureText(event)))
-          }
-        }
-        catch {
-          finish(new Error('主动探测响应解析失败'))
-        }
-      }
-      source.onerror = () => finish(new Error('主动探测连接已断开'))
-    })
-  }
-
-  async function handleModelAttribution(account = testingAccount.value) {
-    if (!account?.id || !connectionTestSelectedModel.value || modelAttributionStatus.value === 'running')
-      return
-    abortConnectionTest()
-    abortModelAttribution()
-    const controller = new AbortController()
-    modelAttributionAbortController = controller
-    modelAttributionStatus.value = 'running'
-    modelAttributionProgress.value = 0
-    modelAttributionResult.value = null
-    modelAttributionError.value = ''
-    modelAttributionResponseModels.value = []
-    try {
-      const outputs: Array<{ text: string, expectedCount: number }> = []
-      const responseModels = new Set<string>()
-      for (let probeIndex = 1; probeIndex <= 3; probeIndex += 1) {
-        const output = await runModelAttributionProbe(
-          account.id,
-          connectionTestSelectedModel.value,
-          probeIndex,
-          controller.signal,
-        )
-        outputs.push({ text: output.text, expectedCount: output.expectedCount })
-        if (output.upstreamResponseModel)
-          responseModels.add(output.upstreamResponseModel)
-        modelAttributionProgress.value = probeIndex
-      }
-      const { analyzeModelAttribution } = await import('../model-attribution/modeltrace')
-      if (controller.signal.aborted)
-        return
-      modelAttributionResult.value = analyzeModelAttribution(outputs)
-      modelAttributionResponseModels.value = [...responseModels]
-      modelAttributionStatus.value = 'success'
-    }
-    catch (error: unknown) {
-      if (controller.signal.aborted)
-        return
-      modelAttributionError.value = errorMessage(error, '主动探测模型归因失败')
-      modelAttributionStatus.value = 'error'
-    }
-    finally {
-      if (modelAttributionAbortController === controller)
-        modelAttributionAbortController = undefined
-    }
-  }
-
   async function loadConnectionTestModels(account = testingAccount.value, refresh = false) {
     if (!account?.id || !showConnectionTestModal.value || account.id !== testingAccount.value?.id)
       return
@@ -605,8 +469,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       return
     }
     if (testingConnections.has(account.id))
-      return
-    if (modelAttributionStatus.value === 'running')
       return
     abortConnectionTest()
     connectionTestStatus.value = 'running'
@@ -675,18 +537,11 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     modelsRequest.invalidate()
     if (!open) {
       abortConnectionTest()
-      abortModelAttribution()
     }
   }, { flush: 'sync' })
 
-  watch(connectionTestSelectedModel, (model, previousModel) => {
-    if (previousModel && model !== previousModel)
-      resetConnectionTest()
-  })
-
   onBeforeUnmount(() => {
     abortConnectionTest()
-    abortModelAttribution()
   })
 
   return {
@@ -706,14 +561,8 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     connectionTestSelectedModel,
     connectionTestModelOptions,
     connectionTestStatusView,
-    modelAttributionStatus,
-    modelAttributionProgress,
-    modelAttributionResult,
-    modelAttributionError,
-    modelAttributionResponseModels,
     openConnectionTest,
     handleRefreshConnectionTestModels,
     handleTestConnection,
-    handleModelAttribution,
   }
 }

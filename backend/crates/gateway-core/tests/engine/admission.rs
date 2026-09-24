@@ -23,9 +23,6 @@ fn client_admission_startup_recovery_should_preserve_order_and_exact_facts() {
         let now = SystemTime::now();
         let request = ModelRequestId::new("req_recovery").expect("request id");
         let recovery = ClientAdmissionRecovery {
-            concurrency_id: gateway_core::policy::ClientConcurrencyId::Key(
-                ClientApiKeyId::new("key_recovery").expect("key id"),
-            ),
             client_api_key_id: ClientApiKeyId::new("key_recovery").expect("key id"),
             recent_requests: vec![RecentAdmissionFact {
                 model_request_id: request.clone(),
@@ -99,9 +96,6 @@ fn client_admission_startup_recovery_should_fail_closed_at_each_boundary() {
 
 fn empty_recovery() -> ClientAdmissionRecovery {
     ClientAdmissionRecovery {
-        concurrency_id: gateway_core::policy::ClientConcurrencyId::Key(
-            ClientApiKeyId::new("key_empty").expect("key id"),
-        ),
         client_api_key_id: ClientApiKeyId::new("key_empty").expect("key id"),
         recent_requests: Vec::new(),
         running_requests: Vec::new(),
@@ -191,7 +185,7 @@ struct RecordingAdmissions {
 impl ClientAdmissionPort for RecordingAdmissions {
     fn abandon(
         &self,
-        key: &gateway_core::policy::ClientConcurrencyId,
+        key: &gateway_core::policy::ClientApiKeyId,
         request: &gateway_core::engine::ModelRequestId,
     ) {
         let _ = futures::FutureExt::now_or_never(self.release(key, request));
@@ -205,7 +199,7 @@ impl ClientAdmissionPort for RecordingAdmissions {
     }
     fn release<'a>(
         &'a self,
-        _: &'a gateway_core::policy::ClientConcurrencyId,
+        _: &'a ClientApiKeyId,
         _: &'a ModelRequestId,
     ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
         unreachable!()

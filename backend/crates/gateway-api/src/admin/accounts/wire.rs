@@ -673,7 +673,6 @@ impl AccountRefreshRequest {
 pub struct AccountTestQuery {
     pub account_id: String,
     pub model_id: String,
-    pub attribution_probe: Option<u8>,
 }
 
 impl AccountTestQuery {
@@ -682,34 +681,17 @@ impl AccountTestQuery {
         if self.model_id.trim().is_empty() || self.model_id.chars().any(char::is_control) {
             return Err(WireValidationError::new("modelId"));
         }
-        if self
-            .attribution_probe
-            .is_some_and(|probe| !(1..=3).contains(&probe))
-        {
-            return Err(WireValidationError::new("attributionProbe"));
-        }
         Ok(())
     }
 
     pub(super) fn into_command(
         self,
-    ) -> Result<
-        (
-            ProviderAccountId,
-            UpstreamModelId,
-            AccountConnectionTestMode,
-        ),
-        WireValidationError,
-    > {
+    ) -> Result<(ProviderAccountId, UpstreamModelId), WireValidationError> {
         self.validate()?;
         Ok((
             ProviderAccountId::new(self.account_id)
                 .map_err(|_| WireValidationError::new("accountId"))?,
             UpstreamModelId::new(self.model_id).map_err(|_| WireValidationError::new("modelId"))?,
-            self.attribution_probe
-                .map_or(AccountConnectionTestMode::Standard, |probe_index| {
-                    AccountConnectionTestMode::ModelAttribution { probe_index }
-                }),
         ))
     }
 }
@@ -1045,24 +1027,11 @@ pub struct AccountConnectionTestEvent {
 impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
     fn from(event: DomainConnectionTestEvent) -> Self {
         let data = match event {
-            DomainConnectionTestEvent::Started {
-                model,
-                probe_index,
-                expected_count,
-            } => {
-                let mut data = serde_json::json!({
-                    "type": "test_start",
-                    "model": model,
-                    "text": "正在连接上游 Responses"
-                });
-                if let Some(probe_index) = probe_index {
-                    data["probeIndex"] = serde_json::json!(probe_index);
-                }
-                if let Some(expected_count) = expected_count {
-                    data["expectedCount"] = serde_json::json!(expected_count);
-                }
-                data
-            }
+            DomainConnectionTestEvent::Started { model } => serde_json::json!({
+                "type": "test_start",
+                "model": model,
+                "text": "正在连接上游 Responses"
+            }),
             DomainConnectionTestEvent::Request {
                 model,
                 input_text,

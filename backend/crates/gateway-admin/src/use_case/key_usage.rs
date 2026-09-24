@@ -182,11 +182,6 @@ impl KeyUsageService for DefaultKeyUsageService {
             return Ok(None);
         };
         let filter = usage_filter(&id, query.usage.model);
-        let seat_keys = self
-            .keys
-            .seat_key_usage(&id)
-            .await
-            .map_err(|error| map_store_error(error, "seat key usage"))?;
         let now = Utc::now();
         // 健康条始终展示北京时间今日，不随历史范围或模型筛选改变。
         let today = TimeRange {
@@ -210,7 +205,6 @@ impl KeyUsageService for DefaultKeyUsageService {
         .map_err(|error| map_store_error(error, "key usage overview"))?;
         Ok(Some(KeyUsageOverview {
             key,
-            seat_keys,
             overview,
             trend,
             models,

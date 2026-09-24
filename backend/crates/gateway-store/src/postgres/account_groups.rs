@@ -106,69 +106,6 @@ impl PgAccountGroupRepository {
 
 #[async_trait]
 impl AccountGroupStore for PgAccountGroupRepository {
-    async fn load_car_quota_settings(
-        &self,
-    ) -> AdminStoreResult<gateway_admin::model::account_groups::CarQuotaSettings> {
-        super::seats::load_car_quota_settings(&self.pool).await
-    }
-    async fn replace_car_quota_settings(
-        &self,
-        command: gateway_admin::model::account_groups::ReplaceCarQuotaSettings,
-        context: &MutationContext,
-    ) -> AdminStoreResult<gateway_admin::model::account_groups::CarQuotaSettings> {
-        super::seats::replace_car_quota_settings(&self.pool, command, context).await
-    }
-    async fn list_car_accounts(
-        &self,
-    ) -> AdminStoreResult<Vec<gateway_admin::model::account_groups::CarAccount>> {
-        super::seats::list_car_accounts(&self.pool).await
-    }
-    async fn load_car_quota_state(
-        &self,
-        group_id: AccountGroupId,
-    ) -> AdminStoreResult<gateway_admin::model::account_groups::CarQuotaState> {
-        super::seats::load_car_quota_state(&self.pool, group_id).await
-    }
-    async fn reconcile_car_quota(
-        &self,
-        observation: gateway_admin::model::account_groups::CarQuotaObservation,
-    ) -> AdminStoreResult<gateway_admin::model::account_groups::CarQuotaState> {
-        super::seats::reconcile_car_quota(&self.pool, observation).await
-    }
-    async fn save_car_weights(
-        &self,
-        command: gateway_admin::model::account_groups::SaveCarWeights,
-        context: &MutationContext,
-    ) -> AdminStoreResult<gateway_admin::model::Revision> {
-        super::seats::save_car_weights(&self.pool, command, context).await
-    }
-    async fn convert_to_car(
-        &self,
-        id: AccountGroupId,
-        context: &MutationContext,
-    ) -> AdminStoreResult<gateway_admin::model::Revision> {
-        super::seats::convert_to_car(&self.pool, id, context).await
-    }
-    async fn list_seats(
-        &self,
-        group_id: AccountGroupId,
-    ) -> AdminStoreResult<Vec<gateway_admin::model::account_groups::SeatRecord>> {
-        super::seats::list_seats(&self.pool, group_id).await
-    }
-    async fn save_seat(
-        &self,
-        command: gateway_admin::model::account_groups::SaveSeat,
-        context: &MutationContext,
-    ) -> AdminStoreResult<gateway_admin::model::Revision> {
-        super::seats::save_seat(&self.pool, command, context).await
-    }
-    async fn join_seat(
-        &self,
-        command: gateway_admin::model::account_groups::JoinSeat,
-        context: &MutationContext,
-    ) -> AdminStoreResult<gateway_admin::model::Revision> {
-        super::seats::join_seat(&self.pool, command, context).await
-    }
     async fn list_account_groups(
         &self,
         query: AccountGroupListQuery,
@@ -460,7 +397,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
 
 fn group_select() -> QueryBuilder<Postgres> {
     QueryBuilder::new(
-        "select g.id, g.name, g.description, g.color, g.enabled, g.disable_fast, g.is_car, g.created_at, g.updated_at,
+        "select g.id, g.name, g.description, g.color, g.enabled, g.disable_fast, g.created_at, g.updated_at,
                 coalesce(members.member_count, 0)::bigint as member_count,
                 coalesce(keys.client_key_count, 0)::bigint as client_key_count,
                 coalesce(members.provider_counts, '{}'::jsonb) as provider_counts
@@ -479,7 +416,7 @@ fn group_select() -> QueryBuilder<Postgres> {
          ) members on true
          left join lateral (
            select count(*)::bigint as client_key_count
-           from client_key_effective_groups kg
+           from client_api_key_groups kg
            where kg.account_group_id = g.id
          ) keys on true
          where true",
@@ -537,9 +474,6 @@ fn group_record(row: &sqlx::postgres::PgRow) -> StoreResult<AccountGroupRecord> 
     let provider_counts = serde_json::from_value::<BTreeMap<String, u64>>(provider_counts)
         .map_err(|_| invalid("invalid provider counts"))?;
     Ok(AccountGroupRecord {
-        is_car: row
-            .try_get("is_car")
-            .map_err(|_| invalid("invalid car type"))?,
         disable_fast: row
             .try_get("disable_fast")
             .map_err(|_| invalid("invalid disable_fast"))?,
