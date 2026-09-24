@@ -2364,6 +2364,95 @@ async fn api_key_admin_exposes_only_configuration_and_preserves_key_when_rotatin
 }
 
 #[tokio::test]
+async fn api_key_rotation_applies_and_preserves_model_presentation_overrides() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let seeded: BTreeMap<String, provider_openai::credential::ApiKeyModelPresentationOverride> =
+        serde_json::from_value(json!({"Qwen3.8-27B": {"imageInput": true}})).unwrap();
+    store
+        .seed_api_key_with_presentation_overrides(
+            "acct_api_overrides",
+            "https://first.example/v1".to_owned(),
+            provider_openai::credential::ResponsesTransport::Http,
+            seeded,
+        )
+        .await;
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    let admin = bundle.admin_provider();
+    let account = store.account("acct_api_overrides").unwrap();
+    let configuration = admin
+        .account_configuration(account.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        configuration
+            .expose_to_provider()
+            .expose_to_provider()
+            .get("modelPresentationOverrides"),
+        Some(&json!({"Qwen3.8-27B": {"imageInput": true, "imageDetailOriginal": false}}))
+    );
+    let expected = json!({
+        "Qwen3.8-27B": {"imageInput": true, "imageDetailOriginal": false}
+    });
+
+    // 省略覆盖字段的轮换只改地址，不清空既有能力覆盖。
+    let prepared = admin
+        .prepare_rotation(PrepareCredentialRotation {
+            account: account_record(&account),
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                json!({"base_url": "https://second.example/root", "transport": "http"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )),
+        })
+        .await
+        .unwrap();
+    let material = prepared
+        .facts()
+        .provider_material
+        .expose_to_provider()
+        .expose_to_provider();
+    assert_eq!(material.get("modelPresentationOverrides"), Some(&expected));
+    assert_eq!(material.get("api_key"), Some(&json!("sk-api-test-only")));
+
+    // 显式给出的覆盖替换既有能力声明。
+    let prepared = admin
+        .prepare_rotation(PrepareCredentialRotation {
+            account: account_record(&account),
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                json!({
+                    "base_url": "https://second.example/root",
+                    "transport": "http",
+                    "modelPresentationOverrides": {"Qwen3.8-27B": {"imageInput": false}}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            )),
+        })
+        .await
+        .unwrap();
+    let material = prepared
+        .facts()
+        .provider_material
+        .expose_to_provider()
+        .expose_to_provider();
+    assert_eq!(
+        material.get("modelPresentationOverrides"),
+        Some(&json!({
+            "Qwen3.8-27B": {"imageInput": false, "imageDetailOriginal": false}
+        }))
+    );
+}
+
+#[tokio::test]
 async fn browser_authorization_declares_callback_and_rejects_extra_login_inputs() {
     use gateway_admin::model::{
         provider_capabilities::AuthorizationCompletion,

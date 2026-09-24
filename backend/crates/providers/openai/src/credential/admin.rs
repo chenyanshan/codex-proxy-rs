@@ -3,7 +3,7 @@
 //! 本模块不读写 Store；应用层负责把已验证的 Core command 映射到
 //! 持久层的原子配置 revision + audit 事务。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -24,7 +24,9 @@ use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
-use super::api_key::{ApiKeyCredentialData, CODEX_AUTHENTICATION_KIND_API_KEY};
+use super::api_key::{
+    ApiKeyCredentialData, ApiKeyModelPresentationOverride, CODEX_AUTHENTICATION_KIND_API_KEY,
+};
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::security::CodexCredentialCodec;
 use super::token_client::{
@@ -258,6 +260,11 @@ struct CodexCprApiKeyExportAccount {
     base_url: String,
     api_key: String,
     transport: ResponsesTransport,
+    #[serde(
+        rename = "modelPresentationOverrides",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    model_presentation_overrides: BTreeMap<String, ApiKeyModelPresentationOverride>,
 }
 
 #[derive(Serialize)]
@@ -455,6 +462,8 @@ impl CodexCredentialAdmin {
             base_url: String,
             transport: ResponsesTransport,
             api_key: Option<String>,
+            #[serde(default, rename = "modelPresentationOverrides")]
+            model_presentation_overrides: Option<BTreeMap<String, ApiKeyModelPresentationOverride>>,
         }
         let rotation: Rotation = serde_json::from_value(material)
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
@@ -468,6 +477,9 @@ impl CodexCredentialAdmin {
         data.transport = rotation.transport;
         if let Some(api_key) = rotation.api_key {
             data.api_key = api_key;
+        }
+        if let Some(overrides) = rotation.model_presentation_overrides {
+            data.model_presentation_overrides = overrides;
         }
         let credential = CodexCredentialCodec::encode_complete(CodexCredentialData::ApiKey(data))
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
@@ -698,6 +710,7 @@ impl CodexCredentialAdmin {
                         base_url: data.base_url,
                         api_key: data.api_key,
                         transport: data.transport,
+                        model_presentation_overrides: data.model_presentation_overrides,
                     })
                 }
 
@@ -1547,6 +1560,12 @@ fn parse_api_key_import(value: &Value) -> Result<ApiKeyCredentialData, CodexCred
         transport: credentials
             .get("transport")
             .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|_| CodexCredentialAdminError::InvalidInput)?
+            .unwrap_or_default(),
+        model_presentation_overrides: credentials
+            .get("modelPresentationOverrides")
+            .map(|value| serde_json::from_value(value.clone()))
             .transpose()
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?
             .unwrap_or_default(),

@@ -26,7 +26,7 @@ pub(crate) use types::parse_access_token_expiration;
 
 pub use api_key::{
     ApiKeyAuthentication, ApiKeyConfiguration, ApiKeyCredentialData,
-    CODEX_AUTHENTICATION_KIND_API_KEY,
+    ApiKeyModelPresentationOverride, CODEX_AUTHENTICATION_KIND_API_KEY,
 };
 
 pub use admin::{

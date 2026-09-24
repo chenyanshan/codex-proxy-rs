@@ -406,7 +406,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 }
 
 interface AccountUpdateParam {
-  connection?: { baseUrl?: string, transport: ApiKeyConfiguration['transport'], apiKey?: string }
+  connection?: { baseUrl?: string, transport: ApiKeyConfiguration['transport'], apiKey?: string, modelPresentationOverrides?: ApiKeyConfiguration['modelPresentationOverrides'] }
   outboundProxyUrl?: string
   outboundProxyId?: string
   accountId: string
@@ -713,6 +713,12 @@ export function pollAccountAuthorization(
 export interface ApiKeyConfiguration {
   base_url: string
   transport: 'http' | 'prefer_websocket'
+  modelPresentationOverrides?: Record<string, ModelPresentationOverride>
+}
+
+export interface ModelPresentationOverride {
+  imageInput: boolean
+  imageDetailOriginal: boolean
 }
 
 export function getAccountDetail(data: AccountIdParam, options: RequestOptions = {}) {

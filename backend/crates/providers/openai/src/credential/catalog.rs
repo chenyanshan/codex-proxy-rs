@@ -24,6 +24,7 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
+use super::{ApiKeyModelPresentationOverride, CodexCredentialData};
 use crate::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use crate::transport::{CodexBackendClient, CodexCatalogModel, CodexRequestContext};
 
@@ -299,17 +300,35 @@ impl CodexCredentialCatalogService {
                     let result = self
                         .cached_client_account_catalog(&account, client_version, profile)
                         .await;
-                    (account, result)
+                    let overrides = if result.is_ok() {
+                        self.api_key_presentation_overrides(&account).await
+                    } else {
+                        BTreeMap::new()
+                    };
+                    (account, result, overrides)
                 }
             })
             .buffer_unordered(MAX_CONCURRENT_API_CATALOGS);
+        // 同名模型可能分布于多个可选账号。仅公布所有成功发现该模型的账号都声明的能力。
+        let mut image_capabilities = BTreeMap::<String, ApiKeyModelPresentationOverride>::new();
         // 所有 API 账号共享等待预算；慢上游不能逐个耗尽超时或阻塞 OAuth 目录。
         let deadline = Instant::now() + MODEL_CATALOG_TIMEOUT;
-        while let Ok(Some((account, result))) =
+        while let Ok(Some((account, result, overrides))) =
             tokio::time::timeout_at(deadline, catalogs.next()).await
         {
             if let Ok(mut models) = result {
                 models.retain(|model| account.model_access().allows(model.model.as_str()));
+                for model in &models {
+                    let id = model.model.as_str();
+                    let declared = overrides.get(id).copied().unwrap_or_default();
+                    image_capabilities
+                        .entry(id.to_owned())
+                        .and_modify(|capability| {
+                            capability.image_input &= declared.image_input;
+                            capability.image_detail_original &= declared.image_detail_original;
+                        })
+                        .or_insert(declared);
+                }
                 api_catalogs.insert(account.id().clone(), models);
             }
         }
@@ -323,6 +342,19 @@ impl CodexCredentialCatalogService {
         let api_models = native
             .into_iter()
             .chain(adapted)
+            .map(|mut model| {
+                if let ProviderModelContent::Adapted(presentation) = &mut model.content {
+                    let capability = image_capabilities
+                        .get(model.model.as_str())
+                        .copied()
+                        .unwrap_or_default();
+                    *presentation = presentation
+                        .clone()
+                        .with_image_input(capability.image_input)
+                        .with_image_detail_original(capability.image_detail_original);
+                }
+                model
+            })
             .filter(|model| seen.insert(model.model.clone()))
             .collect::<Vec<_>>();
         accounts.retain(|account| {
@@ -436,6 +468,17 @@ impl CodexCredentialCatalogService {
             })
             .await;
         result.result.clone()
+    }
+
+    /// 不可读的账号凭据不能为聚合目录提供图片能力承诺。
+    async fn api_key_presentation_overrides(
+        &self,
+        account: &ProviderAccount,
+    ) -> BTreeMap<String, ApiKeyModelPresentationOverride> {
+        match self.repository.load_complete_data(account).await {
+            Ok(CodexCredentialData::ApiKey(data)) => data.model_presentation_overrides,
+            _ => BTreeMap::new(),
+        }
     }
 
     #[must_use]

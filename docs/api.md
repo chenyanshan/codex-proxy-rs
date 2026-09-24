@@ -290,6 +290,9 @@ OpenAI Provider 按客户端传入的 `client_version` 请求上游目录，完�
 和字段缺失的区别。
 API Key 上游返回完整 Codex `models` 目录时沿用该合同；仅返回普通 `data` 模型列表时使用通用画像，
 未提供的推理能力保持未知，不补充推理档位。
+普通模型 ID 的账号可在 API Key 凭据中声明 `modelPresentationOverrides`。覆盖只作用于该账号已发现、
+且账号模型政策允许的模型；同一 Client Key 可选的多个 API Key 账号都返回该 ID 时，图片输入与原图
+`detail` 能力分别取各账号声明的交集。覆盖不改写上游完整 Codex 模型对象。
 模型别名仅替换 `slug`，不替换上游展示名、提示词、能力或 `priority`；保持原生模型顺序，新增别名附在后面。
 目录按当前路由快照的模型存在性及账号模型政策过滤，避免公布已知无法路由的模型；新模型需待后台目录对账后进入列表。
 xAI 没有 Codex 原生目录，继续使用明确的通用画像适配。
@@ -746,7 +749,10 @@ API Key 账号使用以下独立凭据形态：
     "name": "团队上游",
     "base_url": "https://api.example.com/v1",
     "api_key": "<upstream-api-key>",
-    "transport": "http"
+    "transport": "http",
+    "modelPresentationOverrides": {
+      "vision-model": { "imageInput": true, "imageDetailOriginal": false }
+    }
   }
 }
 ```
@@ -757,8 +763,11 @@ API Key 账号使用以下独立凭据形态：
 `transport` 可省略（默认 `http`）或设为 `prefer_websocket`。API Key 使用 Bearer 认证与普通 JSON，
 不携带 OAuth Cookie 或 ChatGPT 身份。上游模型列表使用标准 `/models` 格式，按账号和凭据版本隔离；
 目录用于模型发现，不作为能力白名单，未列出的模型仍交由上游判断。
+`modelPresentationOverrides` 可省略，键为上游模型 ID；`imageInput` 和 `imageDetailOriginal` 默认为 `false`，
+原图 `detail` 只能在图片输入启用时声明。该字段只改变模型目录展示，不验证上游实际支持能力，
+也不创建未发现的模型。旧版本无法读取该字段时，回退前需从受影响的凭据中移除。
 API Key 每次导入创建独立账号；更新已有账号使用 `/api/admin/accounts/update` 的 `connection` 字段。
-导出会显式包含密钥，沿用敏感导出的确认合同。
+导出会保留非空能力覆盖并显式包含密钥，沿用敏感导出的确认合同。
 
 sub2api 的 `platform=openai`、`type=apikey` 使用 `credentials.base_url` / `credentials.api_key`；
 导入时按其端点规则将服务根、版本前缀或完整 `/responses` 地址转换为 API 前缀，缺省地址为官方 `/v1`。
@@ -813,13 +822,18 @@ sub2api 的 `credentials.model_mapping` 不转换为本项目的账号模型限�
   "connection": {
     "baseUrl": "https://api.example.com/v1",
     "transport": "http",
-    "apiKey": "..."
+    "apiKey": "...",
+    "modelPresentationOverrides": {
+      "vision-model": { "imageInput": true, "imageDetailOriginal": false }
+    }
   }
 }
 ```
 
 `connection.transport` 支持 `http`、`prefer_websocket`。省略 `connection` 时只更新账号设置；
 省略 `connection.apiKey` 保留当前密钥，空字符串无效。API Key 账号必须提供 `connection.baseUrl`，
+省略 `connection.modelPresentationOverrides` 保留当前声明，提交空对象清空；账号详情将非空声明放在
+`credentialConfiguration.modelPresentationOverrides`，供编辑界面读取。目录查询失败时，已保存的声明仍可编辑。
 不能修改账号 ID、Provider 或认证类型，也不接受 OAuth token 或通用凭据文档。
 凭据与设置在同一事务中保存，任一校验或持久化失败均不落库。
 OpenAI OAuth 账号仅提交 `connection: { "transport": "http" }` 或
