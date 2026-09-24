@@ -13,7 +13,7 @@ use gateway_core::engine::execution::{
     ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
 };
 use gateway_core::lifecycle::CancellationToken;
-use gateway_core::policy::{ClientApiKeyId, RateLimits};
+use gateway_core::policy::{ClientApiKeyId, ClientConcurrencyId, RateLimits};
 use gateway_core::routing::ProviderKind;
 use gateway_store::redis::{BufferedClientAdmissionPort, BufferedProviderCircuitPort};
 
@@ -41,7 +41,7 @@ impl RecordingCoordination {
 impl ClientAdmissionPort for RecordingCoordination {
     fn abandon(
         &self,
-        key: &gateway_core::policy::ClientApiKeyId,
+        key: &gateway_core::policy::ClientConcurrencyId,
         request: &gateway_core::engine::ModelRequestId,
     ) {
         let _ = futures::FutureExt::now_or_never(self.release(key, request));
@@ -56,7 +56,7 @@ impl ClientAdmissionPort for RecordingCoordination {
 
     fn release<'a>(
         &'a self,
-        _: &'a ClientApiKeyId,
+        _: &'a gateway_core::policy::ClientConcurrencyId,
         _: &'a ModelRequestId,
     ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
         Box::pin(async move {
@@ -121,7 +121,7 @@ impl CapacityCoordination {
 }
 
 impl ClientAdmissionPort for CapacityCoordination {
-    fn abandon(&self, _: &ClientApiKeyId, request: &ModelRequestId) {
+    fn abandon(&self, _: &ClientConcurrencyId, request: &ModelRequestId) {
         self.active
             .lock()
             .expect("active admission lock")
@@ -146,7 +146,7 @@ impl ClientAdmissionPort for CapacityCoordination {
 
     fn release<'a>(
         &'a self,
-        _: &'a ClientApiKeyId,
+        _: &'a ClientConcurrencyId,
         request: &'a ModelRequestId,
     ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
         Box::pin(async move {
@@ -183,11 +183,17 @@ async fn full_recoverable_coordination_queues_should_drop_writes_without_waiting
 
     tokio::time::timeout(Duration::from_millis(50), async {
         admissions
-            .release(&client, &request)
+            .release(
+                &gateway_core::policy::ClientConcurrencyId::Key(client.clone()),
+                &request,
+            )
             .await
             .expect("first admission enqueue");
         admissions
-            .release(&client, &request)
+            .release(
+                &gateway_core::policy::ClientConcurrencyId::Key(client.clone()),
+                &request,
+            )
             .await
             .expect("full admission queue remains fail-open");
         circuits
@@ -220,7 +226,10 @@ async fn redis_coordination_writers_should_flush_each_side_effect() {
     let request = ModelRequestId::new("req_writer_test").expect("request ID");
     let provider = ProviderKind::new("openai").expect("provider");
     admissions
-        .release(&client, &request)
+        .release(
+            &gateway_core::policy::ClientConcurrencyId::Key(client.clone()),
+            &request,
+        )
         .await
         .expect("enqueue admission release");
     circuits
@@ -262,7 +271,9 @@ async fn awaited_buffered_release_should_not_publish_capacity_before_writer_runs
         NonZeroUsize::new(8).expect("capacity"),
     );
     let client = ClientApiKeyId::new("key_capacity_handoff").expect("client key");
+    let concurrency_id = ClientConcurrencyId::Key(client.clone());
     let request = |index| ClientAdmissionRequest {
+        concurrency_id: concurrency_id.clone(),
         model_request_id: ModelRequestId::new(format!("req_capacity_handoff_{index}"))
             .expect("request ID"),
         client_api_key_id: client.clone(),
@@ -287,7 +298,7 @@ async fn awaited_buffered_release_should_not_publish_capacity_before_writer_runs
 
     assert!(
         admissions
-            .release(&client, &granted[0])
+            .release(&concurrency_id, &granted[0])
             .await
             .expect("enqueue release")
     );

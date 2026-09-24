@@ -66,7 +66,7 @@ async function openAbout() {
           <KeyUsageModels :models="overview.models" :pagination="overview.modelsPagination" :loading="overviewLoading" @page-change="changeModelsPage" />
           <div class="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(400px,1fr)]">
             <KeyUsageTrend class="min-w-0" :points="overview.trend" />
-            <KeyUsageBudget :budget="overview.key" />
+            <KeyUsageBudget :budget="overview.key" :seat-keys="overview.seatKeys" />
           </div>
           <RequestHealthTimelineCard :timeline="overview.healthTimeline" />
         </template>

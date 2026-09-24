@@ -133,6 +133,7 @@ impl ClientKeyService for DefaultClientKeyService {
             .create_client_key(
                 NewClientKey {
                     request_profile_overrides: command.request_profile_overrides,
+                    seat_id: command.seat_id,
                     id,
                     name: command.name,
                     label: command.label,

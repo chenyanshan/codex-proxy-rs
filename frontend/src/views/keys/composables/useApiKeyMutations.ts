@@ -19,6 +19,8 @@ type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
 export interface ApiKeyFormValue {
   providerRequestProfileOverrides: ProviderRequestProfiles
+  seatId: string
+  seatName: string
   customKey: string
   name: string
   label: string
@@ -65,10 +67,12 @@ export function useApiKeyMutations(options: {
     editingKey.value = key
     form.value = {
       providerRequestProfileOverrides: cloneProfiles(key.providerRequestProfileOverrides),
+      seatId: key.seatId ?? '',
+      seatName: key.seatName ?? '',
       customKey: '',
       name: key.name,
       label: key.label ?? '',
-      groupIds: key.groups.map(group => group.id),
+      groupIds: key.seatId ? [] : key.groups.map(group => group.id),
       maxConcurrency: limitInputValue(key.maxConcurrency),
       requestsPerMinute: limitInputValue(key.requestsPerMinute),
       dailyLimitUsd: limitInputValue(key.dailyLimitUsd),
@@ -80,7 +84,7 @@ export function useApiKeyMutations(options: {
   function requestSave() {
     if (!validateForm() || savingKey.value)
       return
-    if (form.value.groupIds.length === 0) {
+    if (!form.value.seatId && form.value.groupIds.length === 0) {
       showAllAccountsConfirm.value = true
       return
     }
@@ -101,7 +105,7 @@ export function useApiKeyMutations(options: {
         const payload = {
           name: form.value.name.trim(),
           label: form.value.label.trim() || null,
-          groupIds: [...new Set(form.value.groupIds)],
+          groupIds: form.value.seatId ? [] : [...new Set(form.value.groupIds)],
           maxConcurrency: parseLimit(form.value.maxConcurrency),
           requestsPerMinute: parseLimit(form.value.requestsPerMinute),
           dailyLimitUsd: form.value.dailyLimitUsd.trim() || '0',
@@ -122,6 +126,7 @@ export function useApiKeyMutations(options: {
           const result = await createApiKey({
             ...payload,
             providerRequestProfileOverrides: cloneProfiles(form.value.providerRequestProfileOverrides),
+            seatId: form.value.seatId || undefined,
             customKey: form.value.customKey || undefined,
           })
           createdKey.value = result.plaintextKey
@@ -306,6 +311,8 @@ export function useApiKeyMutations(options: {
 function emptyForm(): ApiKeyFormValue {
   return {
     providerRequestProfileOverrides: {},
+    seatId: '',
+    seatName: '',
     customKey: '',
     name: '',
     label: '',

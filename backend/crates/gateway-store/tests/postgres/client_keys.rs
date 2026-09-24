@@ -50,6 +50,7 @@ async fn migrated_keys_persist_exactly_and_keep_short_keys_masked() {
             .create_client_key(
                 NewClientKey {
                     request_profile_overrides: Default::default(),
+                    seat_id: None,
                     id: id.clone(),
                     name: format!("Migrated {index}"),
                     label: None,
@@ -105,6 +106,7 @@ async fn duplicate_migrated_keys_conflict_atomically_without_extra_audits() {
     let key = "legacy-key-case-sensitive!";
     let command = |id: &str| NewClientKey {
         request_profile_overrides: Default::default(),
+        seat_id: None,
         id: ClientApiKeyId::new(id).unwrap(),
         name: id.to_owned(),
         label: None,
@@ -141,6 +143,7 @@ async fn duplicate_migrated_keys_conflict_atomically_without_extra_audits() {
 fn generated_client_key_format_remains_valid() {
     let key = NewClientApiKey {
         request_profile_overrides: Default::default(),
+        seat_id: None,
         budget: Default::default(),
         id: "key-1".to_owned(),
         name: "default".to_owned(),
@@ -174,6 +177,7 @@ async fn client_key_names_are_checked_atomically_on_create_and_rename() {
     };
     let create = |id: &str, name: &str| NewClientKey {
         request_profile_overrides: Default::default(),
+        seat_id: None,
         id: ClientApiKeyId::new(id).unwrap(),
         name: name.to_owned(),
         label: None,
@@ -639,6 +643,7 @@ fn client_key_debug_redacts_plaintext() {
     let secret = format!("sk_{}", "s".repeat(43));
     let key = NewClientApiKey {
         request_profile_overrides: Default::default(),
+        seat_id: None,
         budget: Default::default(),
         id: "key-1".to_owned(),
         name: "default".to_owned(),
@@ -711,6 +716,7 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
     let (_, record) = store
         .create_client_key(
             NewClientKey {
+                seat_id: None,
                 id: id.clone(),
                 name: "profile".to_owned(),
                 label: None,

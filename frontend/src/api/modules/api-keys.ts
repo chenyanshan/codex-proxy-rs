@@ -8,6 +8,8 @@ export type ApiKeyBudgetPeriod = 'daily' | 'weekly' | 'all'
 
 export interface ApiKey {
   providerRequestProfileOverrides: ProviderRequestProfiles
+  seatId: string | null
+  seatName: string | null
   openaiClientProfileOverride: ClientProfileSelection | null
   xaiClientProfileOverride: XaiClientProfileSelection | null
 
@@ -79,6 +81,7 @@ interface ApiKeyUpdateParam extends ApiKeyWriteParam {
 
 interface ApiKeyCreateParam extends ApiKeyWriteParam {
   providerRequestProfileOverrides: ProviderRequestProfiles
+  seatId?: string
   customKey?: string
 }
 
