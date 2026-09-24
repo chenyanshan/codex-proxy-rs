@@ -2303,7 +2303,7 @@ async fn repeated_snapshot_conflicts_are_bounded_and_report_the_selection_stage(
 }
 
 #[tokio::test]
-async fn api_websocket_precheck_and_selection_share_the_snapshot_retry_budget() {
+async fn api_websocket_selection_has_bounded_snapshot_retries() {
     let upstream = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     store
@@ -2316,11 +2316,11 @@ async fn api_websocket_precheck_and_selection_share_the_snapshot_retry_budget() 
     store.on_credential_load(Arc::new(|store, id, count| {
         Box::pin(async move {
             assert!(
-                count <= 6,
-                "both credential checks must share one retry budget"
+                count <= 4,
+                "credential selection must have a bounded retry budget"
             );
-            // 第 1、4 次在传输预检冲突，第 3、6 次在最终候选校验冲突。
-            if matches!(count, 1 | 3 | 4 | 6) {
+            // 只对选中的候选读取凭据，连续冲突仍受同一个快照重试预算约束。
+            if count <= 4 {
                 let account = store.account(id.as_str()).expect("account");
                 let observed_at = account
                     .quota()
@@ -2362,7 +2362,7 @@ async fn api_websocket_precheck_and_selection_share_the_snapshot_retry_budget() 
         )
         .await
     else {
-        panic!("mixed snapshot conflicts must stop before WebSocket connection");
+        panic!("snapshot conflicts must stop before WebSocket connection");
     };
     assert_eq!(
         error.kind(),
@@ -2372,7 +2372,7 @@ async fn api_websocket_precheck_and_selection_share_the_snapshot_retry_budget() 
         error.diagnostic().and_then(|diagnostic| diagnostic.code()),
         Some("account_snapshot_conflict")
     );
-    assert_eq!(store.credential_loads(), 6);
+    assert_eq!(store.credential_loads(), 4);
     assert!(leases.requests.lock().expect("leases").is_empty());
     assert!(
         upstream
@@ -10977,4 +10977,192 @@ async fn oauth_http_transport_rejects_websocket_only_warmup_without_sending() {
             .is_err()
     );
     assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+fn websocket_only_new_chain(expected_account: &str) -> Operation {
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            json!({"model":"gpt-5.4", "input":"hello", "store":false, "session_id":"lazy-selection-session"})
+                .as_object()
+                .expect("request object")
+                .clone(),
+        )
+        .expect("request payload")
+        .with_context(Map::from_iter([(
+            "downstream_websocket_connection_id".to_owned(),
+            json!("ws_lazy_selection"),
+        )])),
+    )
+    .with_provider_session_state(
+        ProviderSessionState::new(
+            "openai",
+            Map::from_iter([
+                ("account_id".to_owned(), json!(expected_account)),
+                (
+                    "conversation_id".to_owned(),
+                    json!("lazy-selection-session"),
+                ),
+                ("continuation_scope".to_owned(), json!("persisted")),
+            ]),
+        )
+        .expect("provider session state"),
+    ))
+}
+
+async fn assert_websocket_new_chain_selects(
+    store: &Arc<MemoryAccountStore>,
+    expected_account: &str,
+) -> Arc<TestLeaseCoordinator> {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+    let base_url = format!("http://{}", listener.local_addr().expect("address"));
+    let expected_authorization = format!("Bearer at-{expected_account}");
+    let (release_tx, release_rx) = oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("WebSocket connection");
+        let mut websocket =
+            crate::transport::accept_codex_test_websocket_with(socket, |request, _| {
+                assert_eq!(request.headers()["authorization"], expected_authorization);
+            })
+            .await;
+        websocket
+            .next()
+            .await
+            .expect("request frame")
+            .expect("frame");
+        websocket
+            .send(Message::Text(
+                json!({"type":"response.completed","response":{"id":"resp_new_chain","model":"gpt-5.4","status":"completed","store":false,"output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("completion");
+        let _ = release_rx.await;
+    });
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let provider = provider_with_affinity_and_base_url_and_leases(
+        store,
+        Arc::new(MemorySessionAffinity::default()),
+        base_url,
+        Arc::clone(&leases),
+    );
+    let mut stream = provider
+        .execute(
+            planned_request("openai", websocket_only_new_chain(expected_account)),
+            context("req_lazy_websocket_selection", CancellationToken::new()),
+        )
+        .await
+        .expect("WebSocket account selected");
+    assert_eq!(
+        stream.metadata().provider_account_id().as_str(),
+        expected_account
+    );
+    while let Some(event) = stream.next().await {
+        event.expect("WebSocket response");
+    }
+    drop(stream);
+    release_tx.send(()).expect("release WebSocket server");
+    timeout(Duration::from_secs(5), server)
+        .await
+        .expect("WebSocket server finished")
+        .expect("WebSocket server succeeded");
+    leases
+}
+
+#[tokio::test]
+async fn websocket_new_chain_does_not_read_unused_corrupt_oauth_credential() {
+    use gateway_core::account::{NewProviderAccount, PlaintextCredential};
+
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    create_account(&store, "acct_scope_new").await;
+    let account = store.account("acct_scope_new").expect("account");
+    store
+        .delete_account(account.id())
+        .await
+        .expect("delete account");
+    store
+        .create_account(NewProviderAccount {
+            account,
+            credential: PlaintextCredential::new(serde_json::Map::new()),
+            model_access: None,
+        })
+        .await
+        .expect("persist invalid credential");
+    store.set_scheduling(
+        "acct_provider_contract",
+        None,
+        AccountWeight::new(100).expect("weight"),
+    );
+    store.set_scheduling(
+        "acct_scope_new",
+        None,
+        AccountWeight::new(1).expect("weight"),
+    );
+
+    let leases = assert_websocket_new_chain_selects(&store, "acct_provider_contract").await;
+    assert_eq!(store.credential_loads(), 1);
+    assert_eq!(leases.requests.lock().expect("leases").len(), 1);
+}
+
+#[tokio::test]
+async fn websocket_new_chain_skips_corrupt_oauth_credential_before_lease() {
+    use gateway_core::account::{NewProviderAccount, PlaintextCredential};
+
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    create_account(&store, "acct_scope_new").await;
+    let account = store.account("acct_scope_new").expect("account");
+    store
+        .delete_account(account.id())
+        .await
+        .expect("delete account");
+    store
+        .create_account(NewProviderAccount {
+            account,
+            credential: PlaintextCredential::new(serde_json::Map::new()),
+            model_access: None,
+        })
+        .await
+        .expect("persist invalid credential");
+    store.set_scheduling(
+        "acct_scope_new",
+        None,
+        AccountWeight::new(100).expect("weight"),
+    );
+    store.set_scheduling(
+        "acct_provider_contract",
+        None,
+        AccountWeight::new(1).expect("weight"),
+    );
+
+    let leases = assert_websocket_new_chain_selects(&store, "acct_provider_contract").await;
+    assert_eq!(store.credential_loads(), 2);
+    assert_eq!(leases.requests.lock().expect("leases").len(), 1);
+}
+
+#[tokio::test]
+async fn websocket_new_chain_skips_http_only_oauth_credential_before_lease() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    create_account(&store, "acct_scope_new").await;
+    store.set_oauth_transport(
+        "acct_scope_new",
+        provider_openai::credential::ResponsesTransport::Http,
+    );
+    store.set_scheduling(
+        "acct_scope_new",
+        None,
+        AccountWeight::new(100).expect("weight"),
+    );
+    store.set_scheduling(
+        "acct_provider_contract",
+        None,
+        AccountWeight::new(1).expect("weight"),
+    );
+
+    let leases = assert_websocket_new_chain_selects(&store, "acct_provider_contract").await;
+    assert_eq!(store.credential_loads(), 2);
+    assert_eq!(leases.requests.lock().expect("leases").len(), 1);
 }

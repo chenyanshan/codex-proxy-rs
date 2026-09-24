@@ -456,30 +456,6 @@ impl CodexCredentialSelector {
                             }))
                 })
                 .collect::<Vec<_>>();
-            let mut eligible = Vec::with_capacity(accounts.len());
-            for account in accounts {
-                if request.requires_websocket
-                    && pinned_account.as_ref().is_none_or(|id| id == account.id())
-                {
-                    let runtime = match self.repository.load_runtime_credential(&account).await {
-                        Ok(runtime) => runtime,
-                        Err(CredentialRepositoryError::RevisionConflict) => {
-                            retry_account_snapshot(
-                                request.attempt,
-                                &account,
-                                &mut snapshot_retries,
-                            )?;
-                            continue 'capacity;
-                        }
-                        Err(error) => return Err(error.into()),
-                    };
-                    if runtime.transport == super::ResponsesTransport::Http {
-                        continue;
-                    }
-                }
-                eligible.push(account);
-            }
-            let accounts = eligible;
             if model_access_rejected > 0 && request.attempt.trace().is_enabled() {
                 request.attempt.trace().record(
                     "account.model_access",
@@ -578,7 +554,7 @@ impl CodexCredentialSelector {
                 affinity.bound_account().cloned()
             };
             let mut shortest_retry = None;
-            let base_excluded = excluded.clone();
+            let mut base_excluded = excluded.clone();
             let policy = request.attempt.account_selection_policy();
 
             loop {
@@ -667,7 +643,6 @@ impl CodexCredentialSelector {
                         None => Err(CredentialSelectionError::NoEligibleCredential),
                     };
                 };
-                affinity.observe_preferred_selection(selection.preferred());
                 let selected = selection.candidate();
                 let account = candidates
                     .iter()
@@ -682,8 +657,31 @@ impl CodexCredentialSelector {
                         retry_account_snapshot(request.attempt, &account, &mut snapshot_retries)?;
                         continue 'capacity;
                     }
+                    Err(CredentialRepositoryError::InvalidCredentialData)
+                        if request.requires_websocket && pinned_account.is_none() =>
+                    {
+                        // 未指定账号的 WebSocket 请求跳过损坏凭据，不让单个账号阻断整个账号池。
+                        if affinity.bound_account() == Some(account.id()) {
+                            affinity.escape(AffinityEscapeReason::HardUnavailable);
+                        }
+                        base_excluded.insert(account.id().clone());
+                        excluded.insert(account.id().clone());
+                        continue;
+                    }
                     Err(error) => return Err(error.into()),
                 };
+                if request.requires_websocket
+                    && runtime.transport == super::ResponsesTransport::Http
+                {
+                    // 只读取实际选中的凭据；HTTP-only 账号不能占用 WebSocket 租约或进入排队候选。
+                    if affinity.bound_account() == Some(account.id()) {
+                        affinity.escape(AffinityEscapeReason::HardUnavailable);
+                    }
+                    base_excluded.insert(account.id().clone());
+                    excluded.insert(account.id().clone());
+                    continue;
+                }
+                affinity.observe_preferred_selection(selection.preferred());
                 let allows_account_state_mutation = !diagnostic || account.enabled();
                 match self
                     .leases
