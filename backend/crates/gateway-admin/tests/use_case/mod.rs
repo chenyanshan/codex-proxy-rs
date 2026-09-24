@@ -44,9 +44,9 @@ use gateway_admin::{
         observability::{
             DashboardDesktopRelease, DashboardObservation, DashboardWireAttribute,
             DashboardWireProfile, DashboardWireTarget, DesktopReleaseStatus, DiagnosticDimension,
-            DiagnosticObservationPage, DiagnosticPageQuery, OpsErrorPage,
-            OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail, UsageFilter, UsageOverview,
-            UsagePage, UsageQuery,
+            DiagnosticObservationPage, DiagnosticPageQuery, OpsErrorPage, OpsErrorQuery,
+            RequestMetricPoint, TimeRange, UsageDetail, UsageFilter, UsageOverview, UsagePage,
+            UsageQuery,
         },
         provider_credentials::{
             AuthorizationCommit, AuthorizationStarted, CompleteAuthorization, CredentialDetails,
