@@ -416,6 +416,7 @@ impl CodexCredentialSelector {
         }
         let pinned_account = required_account.or(continuation_account);
         let mut snapshot_retries = 0;
+        let mut wait_for_affinity_interval = true;
         'capacity: loop {
             let diagnostic = request.attempt.is_diagnostic_required_account();
             let mut accounts = self.repository.list_for_provider().await?;
@@ -643,6 +644,23 @@ impl CodexCredentialSelector {
                         None => Err(CredentialSelectionError::NoEligibleCredential),
                     };
                 };
+                // 本地最小请求间隔是短暂阻塞；已有会话优先复用原账号的缓存。
+                // 复用现有有界队列，预算用尽或队列满时仍可选择可用备选账号。
+                if wait_for_affinity_interval
+                    && !diagnostic
+                    && pinned_account.is_none()
+                    && queue_policy.max_waiting > 0
+                    && selection.preferred()
+                        == PreferredAccountSelection::Blocked(
+                            AccountSchedulingBlocker::RequestInterval,
+                        )
+                    && let Some(bound) = affinity.preferred_account()
+                {
+                    match waiting.wait(std::slice::from_ref(bound)).await {
+                        Ok(()) => continue 'capacity,
+                        Err(_) => wait_for_affinity_interval = false,
+                    }
+                }
                 let selected = selection.candidate();
                 let account = candidates
                     .iter()
