@@ -274,11 +274,23 @@ pub struct DeleteAccounts {
     pub account_ids: Vec<String>,
 }
 
+/// 账号探测使用的固定服务端场景。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccountConnectionTestMode {
+    #[default]
+    Standard,
+    ModelAttribution {
+        probe_index: u8,
+    },
+}
+
 /// 账号连接测试的语义事件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountConnectionTestEvent {
     Started {
         model: String,
+        probe_index: Option<u8>,
+        expected_count: Option<u16>,
     },
     Request {
         model: String,
@@ -289,7 +301,9 @@ pub enum AccountConnectionTestEvent {
     Content {
         text: String,
     },
-    Completed,
+    Completed {
+        upstream_response_model: Option<String>,
+    },
     Failed {
         source: AccountProbeErrorSource,
         gateway_error_code: GatewayErrorKind,

@@ -717,6 +717,15 @@ where
             .and_then(ProviderResponseObservation::status_code)
     }
 
+    /// 返回最终选中 attempt 由上游响应明确声明的模型。
+    #[must_use]
+    pub fn upstream_response_model(&self) -> Option<&str> {
+        self.current
+            .as_ref()
+            .and_then(|current| current.response_observation.as_ref())
+            .and_then(ProviderResponseObservation::upstream_response_model)
+    }
+
     /// 将已完成响应的账号事实与 Provider 私有状态封装为可丢失的亲和记录。
     ///
     /// Core 不读取 `state` 内容；Provider 将在后续同账号 continuation 时自行解释。

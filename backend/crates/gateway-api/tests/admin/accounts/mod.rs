@@ -861,10 +861,31 @@ mod actions {
     }
 
     #[test]
+    fn connection_test_should_validate_model_attribution_probe() {
+        let invalid: AccountTestQuery = serde_json::from_value(json!({
+            "accountId": "acct_1",
+            "modelId": "gpt-5.6-luna",
+            "attributionProbe": 4
+        }))
+        .expect("decode connection test query");
+        assert_eq!(invalid.validate().unwrap_err().field(), "attributionProbe");
+
+        let valid: AccountTestQuery = serde_json::from_value(json!({
+            "accountId": "acct_1",
+            "modelId": "gpt-5.6-luna",
+            "attributionProbe": 2
+        }))
+        .expect("decode attribution query");
+        valid.validate().expect("valid attribution probe");
+    }
+
+    #[test]
     fn connection_test_events_should_preserve_the_existing_frontend_contract() {
         let events = [
             DomainConnectionTestEvent::Started {
                 model: "grok-4.5".to_owned(),
+                probe_index: None,
+                expected_count: None,
             },
             DomainConnectionTestEvent::Request {
                 model: "grok-4.5".to_owned(),
@@ -875,7 +896,9 @@ mod actions {
             DomainConnectionTestEvent::Content {
                 text: "OK".to_owned(),
             },
-            DomainConnectionTestEvent::Completed {},
+            DomainConnectionTestEvent::Completed {
+                upstream_response_model: Some("grok-4.5-202609".to_owned()),
+            },
             DomainConnectionTestEvent::Failed {
                 source: AccountProbeErrorSource::Upstream,
                 gateway_error_code: GatewayErrorKind::RateLimited,
@@ -910,7 +933,11 @@ mod actions {
                     }
                 }),
                 json!({ "type": "content", "text": "OK" }),
-                json!({ "type": "test_complete", "success": true }),
+                json!({
+                    "type": "test_complete",
+                    "success": true,
+                    "upstreamResponseModel": "grok-4.5-202609"
+                }),
                 json!({
                     "type": "error",
                     "source": "upstream",
@@ -924,6 +951,26 @@ mod actions {
                     "upstreamBody": r#"{"error":{"type":"usage_limit_reached"}}"#
                 }),
             ]
+        );
+    }
+
+    #[test]
+    fn connection_test_start_should_expose_attribution_metadata() {
+        let event = AccountConnectionTestEvent::from(DomainConnectionTestEvent::Started {
+            model: "gpt-5.6-luna".to_owned(),
+            probe_index: Some(2),
+            expected_count: Some(313),
+        });
+
+        assert_eq!(
+            event.data,
+            json!({
+                "type": "test_start",
+                "model": "gpt-5.6-luna",
+                "text": "正在连接上游 Responses",
+                "probeIndex": 2,
+                "expectedCount": 313
+            })
         );
     }
 
