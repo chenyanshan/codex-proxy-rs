@@ -44,7 +44,7 @@ use gateway_admin::{
         observability::{
             DashboardDesktopRelease, DashboardObservation, DashboardWireAttribute,
             DashboardWireProfile, DashboardWireTarget, DesktopReleaseStatus, DiagnosticDimension,
-            DiagnosticObservation, DiagnosticObservationPage, DiagnosticPageQuery, OpsErrorPage,
+            DiagnosticObservationPage, DiagnosticPageQuery, OpsErrorPage,
             OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail, UsageFilter, UsageOverview,
             UsagePage, UsageQuery,
         },
