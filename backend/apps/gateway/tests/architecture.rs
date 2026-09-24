@@ -498,6 +498,7 @@ fn root_test_scenario_allowed(member: &str, module: &Path) -> bool {
 
 fn assert_module_tree(root: &Path, crate_roots: &[&str]) {
     let files = super::rust_files(root);
+    let mut parsed_parents = BTreeMap::<PathBuf, syn::File>::new();
     for relative in &files {
         if crate_roots
             .iter()
@@ -560,7 +561,7 @@ fn assert_module_tree(root: &Path, crate_roots: &[&str]) {
         };
         let declaration_count = declaration_parents
             .iter()
-            .map(|path| external_module_declaration_count(path, module_name))
+            .map(|path| external_module_declaration_count(path, module_name, &mut parsed_parents))
             .sum::<usize>();
         assert_eq!(
             declaration_count,
@@ -571,12 +572,18 @@ fn assert_module_tree(root: &Path, crate_roots: &[&str]) {
     }
 }
 
-fn external_module_declaration_count(path: &Path, module_name: &str) -> usize {
+fn external_module_declaration_count(
+    path: &Path,
+    module_name: &str,
+    parsed_parents: &mut BTreeMap<PathBuf, syn::File>,
+) -> usize {
     if !path.is_file() {
         return 0;
     }
-    let source = fs::read_to_string(path).expect("read parent module source");
-    let syntax = syn::parse_file(&source).expect("parse parent module source");
+    let syntax = parsed_parents.entry(path.to_path_buf()).or_insert_with(|| {
+        let source = fs::read_to_string(path).expect("read parent module source");
+        syn::parse_file(&source).expect("parse parent module source")
+    });
     syntax
         .items
         .iter()
