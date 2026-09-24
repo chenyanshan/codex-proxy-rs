@@ -34,6 +34,9 @@ export interface RuntimeSettings {
   accountAutoFreezeProbeEnabled: boolean
   accountAutoFreezeProbeModel: string | null
   accountAutoFreezeAdaptiveConcurrency: boolean
+  accountWarmupEnabled: boolean
+  accountWarmupScheduleTime: string
+  accountWarmupModel: string | null
   updatedAt: string
 }
 

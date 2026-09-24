@@ -97,7 +97,7 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.core_provider().name(), "openai");
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
-    assert_eq!(contributions.len(), 7);
+    assert_eq!(contributions.len(), 8);
     assert!(
         contributions
             .iter()
@@ -128,6 +128,7 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
         ("openai-cli-release", APPCAST_POLL_INTERVAL),
         ("openai-platform-desktop-release", APPCAST_POLL_INTERVAL),
         ("openai", Duration::from_secs(30)),
+        ("openai-account-warmup", Duration::from_secs(30)),
         (
             "openai-model-catalog",
             config.config.quota_refresh_policy().interval(),

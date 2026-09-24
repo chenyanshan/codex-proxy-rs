@@ -51,6 +51,9 @@ pub struct RuntimeSettings {
     pub account_auto_freeze_probe_enabled: bool,
     pub account_auto_freeze_probe_model: Option<String>,
     pub account_auto_freeze_adaptive_concurrency: bool,
+    pub account_warmup_enabled: bool,
+    pub account_warmup_schedule_time: String,
+    pub account_warmup_model: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -83,6 +86,9 @@ pub struct ReplaceRuntimeSettings {
     pub account_auto_freeze_probe_enabled: bool,
     pub account_auto_freeze_probe_model: Option<String>,
     pub account_auto_freeze_adaptive_concurrency: bool,
+    pub account_warmup_enabled: bool,
+    pub account_warmup_schedule_time: String,
+    pub account_warmup_model: Option<String>,
 }
 
 /// 明文管理员 API Key；按产品约束明文落库，但禁止 Debug 泄漏。

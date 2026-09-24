@@ -66,6 +66,9 @@ pub struct RuntimeSettingsView {
     pub account_auto_freeze_probe_enabled: bool,
     pub account_auto_freeze_probe_model: Option<String>,
     pub account_auto_freeze_adaptive_concurrency: bool,
+    pub account_warmup_enabled: bool,
+    pub account_warmup_schedule_time: String,
+    pub account_warmup_model: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -105,6 +108,9 @@ pub struct UpdateRuntimeSettingsRequest {
     pub account_auto_freeze_probe_enabled: bool,
     pub account_auto_freeze_probe_model: Option<String>,
     pub account_auto_freeze_adaptive_concurrency: bool,
+    pub account_warmup_enabled: bool,
+    pub account_warmup_schedule_time: String,
+    pub account_warmup_model: Option<String>,
 }
 
 impl UpdateRuntimeSettingsRequest {
@@ -184,6 +190,12 @@ impl UpdateRuntimeSettingsRequest {
             self.account_auto_freeze_probe_model.as_deref(),
             "accountAutoFreezeProbeModel",
         )?;
+        if !gateway_core::provider_ports::valid_warmup_schedule_time(
+            &self.account_warmup_schedule_time,
+        ) {
+            return Err(WireValidationError::new("accountWarmupScheduleTime"));
+        }
+        validate_optional_probe_model(self.account_warmup_model.as_deref(), "accountWarmupModel")?;
         Ok(())
     }
 
@@ -230,6 +242,9 @@ impl UpdateRuntimeSettingsRequest {
             account_auto_freeze_probe_enabled: self.account_auto_freeze_probe_enabled,
             account_auto_freeze_probe_model: self.account_auto_freeze_probe_model,
             account_auto_freeze_adaptive_concurrency: self.account_auto_freeze_adaptive_concurrency,
+            account_warmup_enabled: self.account_warmup_enabled,
+            account_warmup_schedule_time: self.account_warmup_schedule_time,
+            account_warmup_model: self.account_warmup_model,
         })
     }
 }
@@ -270,6 +285,9 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             account_auto_freeze_probe_model: settings.account_auto_freeze_probe_model,
             account_auto_freeze_adaptive_concurrency: settings
                 .account_auto_freeze_adaptive_concurrency,
+            account_warmup_enabled: settings.account_warmup_enabled,
+            account_warmup_schedule_time: settings.account_warmup_schedule_time,
+            account_warmup_model: settings.account_warmup_model,
             updated_at: settings.updated_at,
         }
     }

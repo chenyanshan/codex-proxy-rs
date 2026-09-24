@@ -444,6 +444,10 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
         && valid_client_version(command.min_codex_desktop_version.as_deref())
         && valid_client_version(command.min_codex_cli_version.as_deref())
         && valid_probe_model(command.account_auto_freeze_probe_model.as_deref())
+        && gateway_core::provider_ports::valid_warmup_schedule_time(
+            &command.account_warmup_schedule_time,
+        )
+        && valid_probe_model(command.account_warmup_model.as_deref())
         && i64::try_from(command.request_interval_ms).is_ok()
         && (2..=1_000).contains(&command.account_auto_freeze_threshold)
         && (60..=3_600).contains(&command.account_auto_freeze_window_seconds)
