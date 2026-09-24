@@ -7,6 +7,7 @@ mod scheduling;
 mod slots;
 mod snapshot;
 mod subscription;
+mod warmup;
 
 use std::sync::Arc;
 use std::time::SystemTime;

@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use futures::StreamExt as _;
 use gateway_core::account::{
     AccountErrorReason, AccountQuotaSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore,
@@ -31,6 +32,7 @@ use gateway_core::provider_ports::{
 use gateway_protocol::openai::events::{
     ParsedRateLimits, RateLimitDetails, RateLimitWindow, parse_rate_limit_headers,
 };
+use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
 use reqwest::Client;
 use secrecy::ExposeSecret;
 use serde_json::{Map, Value};
@@ -41,8 +43,8 @@ use uuid::Uuid;
 use crate::transport::profile::CodexWireProfileState;
 use crate::transport::protocol::responses::CodexResponsesRequest;
 use crate::transport::{
-    CodexBackendClient, CodexClientError, CodexRateLimitResetCredits,
-    CodexRateLimitResetCreditsConsumeResult, CodexRequestContext,
+    CodexBackendClient, CodexBackendStreamingResponse, CodexClientError,
+    CodexRateLimitResetCredits, CodexRateLimitResetCreditsConsumeResult, CodexRequestContext,
 };
 
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
@@ -68,6 +70,8 @@ const INITIAL_QUOTA_SYNC_BATCH: usize = 100;
 // 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动。
 const QUOTA_FETCH_5XX_MAX_RETRIES: u32 = 2;
 const QUOTA_FETCH_5XX_BASE_DELAY: Duration = Duration::from_secs(1);
+const WARMUP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const WARMUP_STREAM_MAX_BYTES: usize = 256 * 1024;
 
 /// OpenAI Provider 主动额度刷新的调度策略。
 ///
@@ -113,6 +117,74 @@ pub struct CodexWarmupSummary {
     pub skipped_active: u64,
     pub skipped_exhausted: u64,
     pub failed: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WarmupTerminal {
+    Missing,
+    Completed,
+    Failed,
+}
+
+fn observe_warmup_events(events: Vec<SseEvent>, terminal: &mut WarmupTerminal) {
+    for event in events {
+        let parsed = serde_json::from_str::<Value>(&event.data).ok();
+        let kind = parsed
+            .as_ref()
+            .and_then(|data| data.get("type"))
+            .and_then(Value::as_str)
+            .or(event.event.as_deref());
+        match kind {
+            Some("response.completed") => {
+                // 只有明确完成的响应才算预热成功；失败事件即使随后出现完成帧也优先。
+                if *terminal != WarmupTerminal::Failed {
+                    *terminal = if parsed.is_some()
+                        && parsed
+                            .as_ref()
+                            .and_then(|data| data.pointer("/response/status"))
+                            .and_then(Value::as_str)
+                            .is_none_or(|status| status == "completed")
+                    {
+                        WarmupTerminal::Completed
+                    } else {
+                        WarmupTerminal::Failed
+                    };
+                }
+            }
+            Some("response.failed" | "response.incomplete" | "error") => {
+                *terminal = WarmupTerminal::Failed;
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn consume_warmup_sse(
+    response: &mut CodexBackendStreamingResponse,
+) -> Result<(), &'static str> {
+    let mut decoder = SseEventDecoder::default();
+    let mut terminal = WarmupTerminal::Missing;
+    let mut received_bytes = 0usize;
+    while let Some(chunk) = response.body.next().await {
+        let chunk = chunk.map_err(|_| "stream_read_failed")?;
+        received_bytes = received_bytes.saturating_add(chunk.len());
+        if received_bytes > WARMUP_STREAM_MAX_BYTES {
+            return Err("stream_size_limit_exceeded");
+        }
+        let events = decoder.push(&chunk).map_err(|_| "invalid_sse")?;
+        observe_warmup_events(events, &mut terminal);
+        if terminal != WarmupTerminal::Missing {
+            break;
+        }
+    }
+    if terminal == WarmupTerminal::Missing {
+        observe_warmup_events(decoder.finish().map_err(|_| "invalid_sse")?, &mut terminal);
+    }
+    match terminal {
+        WarmupTerminal::Completed => Ok(()),
+        WarmupTerminal::Missing => Err("completion_event_missing"),
+        WarmupTerminal::Failed => Err("response_failed"),
+    }
 }
 
 #[derive(Debug, Error)]
@@ -921,9 +993,9 @@ impl CodexCredentialQuotaService {
         accounts.retain(|account| {
             account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
                 && account.enabled()
-                && !matches!(
+                && matches!(
                     account.credential_state(),
-                    CredentialState::Banned | CredentialState::Invalid
+                    CredentialState::Unknown | CredentialState::Ready
                 )
         });
         let mut summary = CodexWarmupSummary::default();
@@ -1029,29 +1101,68 @@ impl CodexCredentialQuotaService {
                 None,
             );
 
-            match client_for_account
-                .create_response_stream_http_sse(&upstream_request, context)
-                .await
-            {
-                Ok(response) => {
-                    if !response.rate_limit_headers.is_empty() {
-                        let _ = self
-                            .synchronize_passive_headers(&account, &response.rate_limit_headers)
-                            .await;
+            // HTTP 200 只确认响应头；必须消费 SSE 直到终态才能确认预热结果和额度事件。
+            let attempt = tokio::time::timeout(WARMUP_REQUEST_TIMEOUT, async {
+                let mut response = client_for_account
+                    .create_response_stream_http_sse(&upstream_request, context)
+                    .await
+                    .map_err(|_| "request_rejected")?;
+                let terminal = consume_warmup_sse(&mut response).await;
+                let rate_limit_updates = match response.rate_limit_updates.as_ref() {
+                    Some(updates) => std::mem::take(&mut *updates.lock().await),
+                    None => Vec::new(),
+                };
+                Ok::<_, &'static str>((terminal, response.rate_limit_headers, rate_limit_updates))
+            })
+            .await;
+            match attempt {
+                Ok(Ok((terminal, headers, rate_limit_updates))) => {
+                    match terminal {
+                        Ok(()) => {
+                            // 被动额度同步会把成功请求的窗口事实标为可用，失败流不能复用该结论。
+                            if !headers.is_empty()
+                                && let Err(error) =
+                                    self.synchronize_passive_headers(&account, &headers).await
+                            {
+                                tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup rate-limit header sync failed");
+                            }
+                            if !rate_limit_updates.is_empty()
+                                && let Err(error) = self
+                                    .synchronize_passive_rate_limits(&account, &rate_limit_updates)
+                                    .await
+                            {
+                                tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup rate-limit event sync failed");
+                            }
+                            summary.warmed_up += 1;
+                            tracing::info!(
+                                account_id = %account.id(),
+                                model = warmup_model,
+                                "OpenAI account warmed up successfully"
+                            );
+                        }
+                        Err(reason) => {
+                            summary.failed += 1;
+                            tracing::warn!(
+                                account_id = %account.id(),
+                                reason,
+                                "OpenAI account warmup stream failed"
+                            );
+                        }
                     }
-                    summary.warmed_up += 1;
-                    tracing::info!(
-                        account_id = %account.id(),
-                        model = warmup_model,
-                        "OpenAI account warmed up successfully"
-                    );
                 }
-                Err(error) => {
+                Ok(Err(reason)) => {
                     summary.failed += 1;
                     tracing::warn!(
                         account_id = %account.id(),
-                        error = %error,
+                        reason,
                         "OpenAI account warmup request rejected by upstream"
+                    );
+                }
+                Err(_) => {
+                    summary.failed += 1;
+                    tracing::warn!(
+                        account_id = %account.id(),
+                        "OpenAI account warmup request timed out"
                     );
                 }
             }
